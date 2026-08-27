@@ -1,11 +1,11 @@
-# Be More Agent 🤖
-**A Customizable, Offline-First AI Agent for Raspberry Pi**
+# BMO English Teacher 🤖
+**An offline-first English-teaching robot for Raspberry Pi**
 
 [![Watch the Demo](https://img.youtube.com/vi/l5ggH-YhuAw/maxresdefault.jpg)](https://youtu.be/l5ggH-YhuAw)
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue) ![Platform](https://img.shields.io/badge/Platform-Raspberry%20Pi-red) ![License](https://img.shields.io/badge/License-MIT-green)
 
-This project turns a Raspberry Pi into a fully functional, conversational AI agent. Unlike cloud-based assistants, this agent runs **100% locally** on your device. It listens for a wake word, processes speech, "thinks" using a local Large Language Model (LLM), and speaks back with a low-latency neural voice—all while displaying reactive face animations.
+This project turns a Raspberry Pi into BMO English Teacher. It listens for `Hello BMO`, processes speech locally with Ollama, and speaks back with a low-latency neural voice while displaying reactive face animations.
 
 **It is designed as a blank canvas:** You can easily swap the face images and sound effects to create your own character!
 
@@ -72,7 +72,7 @@ curl -fsSL https://ollama.com/install.sh| sh
 ```
 *Pull the required models:*
 ```bash
-ollama pull gemma:2b
+ollama pull qwen2.5:3b
 ollama pull moondream
 ```
 
@@ -86,10 +86,12 @@ chmod +x setup.sh
 *The setup script will install system libraries, create necessary folders, download Piper TTS, and set up the Python virtual environment.*
 
 ### 4. Configure the Wake Word
-The setup script downloads a default wake word ("Hey Jarvis"). To use your own:
-1. Train a model at [OpenWakeWord](https://github.com/dscripka/openWakeWord).
-2. Place the `.onnx` file in the root folder.
-3. Rename it to `wakeword.onnx`.
+Provide an [OpenWakeWord](https://github.com/dscripka/openWakeWord) model trained for `Hello BMO`:
+1. Train or obtain a model for the spoken greeting `Hello BMO`.
+2. Place its `.onnx` file in the repository root as `wakeword.onnx`.
+3. Do not use an existing `Hey Jarvis` model: it is incompatible with the `Hello BMO` identity.
+
+`setup.sh` does not download a wake-word model. Without `wakeword.onnx`, BMO starts with push-to-talk (Return key) available.
 
 ### 5. Run the Agent
 ```bash
@@ -105,12 +107,15 @@ You can modify the hardware behavior and personality in `config.json`. The `agen
 
 ```json
 {
-    "text_model": "gemma3:1b",
+    "text_model": "qwen2.5:3b",
     "vision_model": "moondream",
-    "voice_model": "piper/en_GB-semaine-medium.onnx",
+    "voice_model": "voices/bmo-custom.onnx",
     "chat_memory": true,
-    "camera_rotation": 0,
-    "system_prompt_extras": "You are a helpful robot assistant. Keep responses short and cute."
+    "camera_rotation": 180,
+    "system_prompt_extras": "",
+    "input_device": null,
+    "input_sample_rate": 44100,
+    "wake_word_name": "Hello BMO"
 }
 ```
 
@@ -136,7 +141,8 @@ When you run the `setup.sh` script, it will automatically download the compiled 
 3. Place both downloaded files inside the `voices/` folder.
 4. Ensure your `config.json` file points to the new model:
    ```json
-   "voice_model": "voices/bmo.onnx"
+   "voice_model": "voices/bmo-custom.onnx"
+   ```
 ---
 
 ## ⚠️ Troubleshooting

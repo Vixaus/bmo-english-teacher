@@ -1,4 +1,4 @@
-"""Pure runtime helpers for action parsing, TTS splitting, voice metadata, and history."""
+"""Pure helpers for runtime actions, audio, history, and BMO configuration."""
 
 from __future__ import annotations
 
@@ -21,6 +21,35 @@ ACTION_ALIASES = {
 }
 
 VALID_ACTIONS = {"get_time", "search_web", "capture_image"}
+
+
+def bmo_runtime_defaults():
+    """Return canonical BMO runtime configuration defaults."""
+    return {
+        "text_model": "qwen2.5:3b",
+        "vision_model": "moondream",
+        "voice_model": "voices/bmo-custom.onnx",
+        "chat_memory": True,
+        "camera_rotation": 180,
+        "system_prompt_extras": "",
+        "input_device": None,
+        "input_sample_rate": 44100,
+        "wake_word_name": "Hello BMO",
+    }
+
+
+def missing_wake_word_warning(model_path: str, wake_word_name: str):
+    """Return actionable warning when wake-word activation is unavailable."""
+    return (
+        f"[WARNING] Wake-word model missing: {model_path}. "
+        f"Add user-supplied wakeword.onnx trained for '{wake_word_name}'; "
+        "push-to-talk remains available."
+    )
+
+
+def interpolate_wake_word_name(template: str, wake_word_name: str):
+    """Insert wake-word identity without interpreting JSON braces in a prompt."""
+    return template.replace("{wake_word_name}", wake_word_name)
 
 
 def extract_action(text: Any):
@@ -196,4 +225,3 @@ def _coerce_positive_int(value: Any):
     if isinstance(value, int) and value > 0:
         return value
     return None
-

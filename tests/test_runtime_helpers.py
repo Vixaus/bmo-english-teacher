@@ -5,8 +5,11 @@ import unittest
 from pathlib import Path
 
 from runtime_helpers import (
+    bmo_runtime_defaults,
     extract_action,
+    interpolate_wake_word_name,
     load_voice_sample_rate,
+    missing_wake_word_warning,
     normalize_action,
     normalize_history,
     split_tts_segments,
@@ -146,6 +149,46 @@ class RuntimeHelperHistoryTests(unittest.TestCase):
             ],
         )
         self.assertEqual(raw_history, original)
+
+
+class RuntimeHelperBmoIdentityTests(unittest.TestCase):
+    def test_bmo_runtime_defaults_match_canonical_config(self):
+        self.assertEqual(
+            bmo_runtime_defaults(),
+            {
+                "text_model": "qwen2.5:3b",
+                "vision_model": "moondream",
+                "voice_model": "voices/bmo-custom.onnx",
+                "chat_memory": True,
+                "camera_rotation": 180,
+                "system_prompt_extras": "",
+                "input_device": None,
+                "input_sample_rate": 44100,
+                "wake_word_name": "Hello BMO",
+            },
+        )
+
+    def test_missing_wake_word_warning_keeps_ptt_available(self):
+        self.assertEqual(
+            missing_wake_word_warning("./wakeword.onnx", "Hello BMO"),
+            "[WARNING] Wake-word model missing: ./wakeword.onnx. "
+            "Add user-supplied wakeword.onnx trained for 'Hello BMO'; "
+            "push-to-talk remains available.",
+        )
+
+    def test_wake_word_template_keeps_action_json_machine_parseable(self):
+        template = (
+            "Say {wake_word_name}. "
+            'JSON: {"action": "ACTION_NAME", "value": "short request value"}'
+        )
+
+        self.assertEqual(
+            interpolate_wake_word_name(template, "Hello BMO"),
+            (
+                "Say Hello BMO. "
+                'JSON: {"action": "ACTION_NAME", "value": "short request value"}'
+            ),
+        )
 
 
 if __name__ == "__main__":

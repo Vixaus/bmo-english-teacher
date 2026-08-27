@@ -68,16 +68,15 @@ pip install -r requirements.txt
 # 6. Pull AI Models
 echo -e "${YELLOW}[6/6] Checking AI Models...${NC}"
 if command -v ollama &> /dev/null; then
-    ollama pull gemma3:1b
+    ollama pull qwen2.5:3b
     ollama pull moondream
 else
     echo -e "${RED}❌ Ollama not found. Please install it manually.${NC}"
 fi
 
-# 7. OpenWakeWord Model (Added this back so the user has a default)
+# 7. OpenWakeWord Model
 if [ ! -f "wakeword.onnx" ]; then
-    echo -e "${YELLOW}Downloading default 'Hey Jarvis' wake word...${NC}"
-    curl -L -o wakeword.onnx https://github.com/dscripka/openWakeWord/raw/main/openwakeword/resources/models/hey_jarvis_v0.1.onnx
+    echo -e "${YELLOW}Wake-word model missing. Add user-supplied wakeword.onnx trained for 'Hello BMO'; push-to-talk remains available.${NC}"
 fi
 
 echo -e "${GREEN}✨ Setup Complete! Run 'source venv/bin/activate' then 'python agent.py'${NC}"

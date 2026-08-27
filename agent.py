@@ -31,8 +31,11 @@ import wave
 import struct 
 from vachanatts import TTS as ThaiTTS
 from runtime_helpers import (
+    bmo_runtime_defaults,
     extract_action,
+    interpolate_wake_word_name,
     load_voice_sample_rate,
+    missing_wake_word_warning,
     normalize_action,
     normalize_history,
     split_tts_segments,
@@ -67,16 +70,7 @@ WAKE_WORD_THRESHOLD = 0.5
 # HARDWARE SETTINGS
 INPUT_DEVICE_NAME = None
 
-DEFAULT_CONFIG = {
-    "text_model": "qwen2.5:3b",
-    "vision_model": "moondream",
-    "voice_model": "piper/en_GB-semaine-medium.onnx",
-    "chat_memory": True,
-    "camera_rotation": 0,
-    "system_prompt_extras": "",
-    "input_device": None,
-    "input_sample_rate": None
-}
+DEFAULT_CONFIG = bmo_runtime_defaults()
 
 # LLM SETTINGS
 OLLAMA_OPTIONS = {
@@ -118,6 +112,7 @@ def load_config():
 CURRENT_CONFIG = load_config()
 TEXT_MODEL = CURRENT_CONFIG["text_model"]
 VISION_MODEL = CURRENT_CONFIG["vision_model"]
+WAKE_WORD_NAME = CURRENT_CONFIG["wake_word_name"]
 
 def resolve_input_device(config):
     requested = config.get("input_device")
@@ -195,9 +190,9 @@ BASE_SYSTEM_PROMPT = """You are a helpful robot assistant running on a Raspberry
 You are a friendly, child-safe English teacher for elementary learners, roughly ages 6-12.
 
 GREETING AND MODE RULES:
-- Before mode selection or teaching, require the learner's message to contain the greeting "Hello Nemo", matched case-insensitively. Allow extra words before or after the greeting.
-- If the greeting is missing, reply only with exactly: Please say Hello Nemo to begin.
-- After a valid greeting, begin the first response with "Hello Nemo" and show these two choices exactly:
+- Before mode selection or teaching, require the learner's message to contain the greeting "{WAKE_WORD_NAME}", matched case-insensitively. Allow extra words before or after the greeting.
+- If the greeting is missing, reply only with exactly: Please say {WAKE_WORD_NAME} to begin.
+- After a valid greeting, begin the first response with "{WAKE_WORD_NAME}" and show these two choices exactly:
   Practice Mode — Skills coming soon
   Test Mode — Skills coming soon
 - Accept a clearly named Practice Mode or Test Mode choice, matched case-insensitively. If the choice is unclear, reply only with exactly: Please choose Practice Mode or Test Mode.
@@ -237,8 +232,8 @@ RESPONSE AND ACTIONS:
 User: What time is it?
 You: {"action": "get_time", "value": "now"}
 
-User: Hello Nemo!
-You: Hello Nemo! Please choose a mode:
+User: {WAKE_WORD_NAME}!
+You: {WAKE_WORD_NAME}! Please choose a mode:
   Practice Mode — Skills coming soon
   Test Mode — Skills coming soon
 
@@ -250,6 +245,8 @@ You: {"action": "capture_image", "value": "environment"}
 
 ### END EXAMPLES ###
 """
+
+BASE_SYSTEM_PROMPT = interpolate_wake_word_name(BASE_SYSTEM_PROMPT, WAKE_WORD_NAME)
 
 SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + "\n\n" + CURRENT_CONFIG.get("system_prompt_extras", "")
 
@@ -269,7 +266,7 @@ class BotGUI:
 
     def __init__(self, master):
         self.master = master
-        master.title("Pi Assistant")
+        master.title("BMO English Teacher")
         master.attributes('-fullscreen', True) 
         master.bind('<Escape>', self.exit_fullscreen)
         
@@ -302,22 +299,22 @@ class BotGUI:
         self.exiting = False
         
         # --- WAKE WORD INITIALIZATION ---
-        print("[INIT] Loading Wake Word...", flush=True)
+        print(f"[INIT] Loading Wake Word for '{WAKE_WORD_NAME}'...", flush=True)
         self.oww_model = None
         if os.path.exists(WAKE_WORD_MODEL):
             try:
                 self.oww_model = Model(wakeword_model_paths=[WAKE_WORD_MODEL])
-                print("[INIT] Wake Word Loaded.", flush=True)
+                print(f"[INIT] Wake Word Loaded for '{WAKE_WORD_NAME}'.", flush=True)
             except TypeError:
                 try:
                     self.oww_model = Model(wakeword_models=[WAKE_WORD_MODEL])
-                    print("[INIT] Wake Word Loaded (New API).", flush=True)
+                    print(f"[INIT] Wake Word Loaded for '{WAKE_WORD_NAME}' (New API).", flush=True)
                 except Exception as e:
                     print(f"[CRITICAL] Failed to load model: {e}")
             except Exception as e:
                 print(f"[CRITICAL] Failed to load model: {e}")
         else:
-            print(f"[CRITICAL] Model not found: {WAKE_WORD_MODEL}")
+            print(missing_wake_word_warning(WAKE_WORD_MODEL, WAKE_WORD_NAME), flush=True)
 
         # GUI Setup
         self.background_label = tk.Label(master)
