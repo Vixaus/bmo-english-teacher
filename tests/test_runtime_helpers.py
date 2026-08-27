@@ -37,6 +37,11 @@ class RuntimeHelperActionTests(unittest.TestCase):
             )
         )
 
+    def test_extract_action_rejects_unsupported_action_object(self):
+        self.assertIsNone(
+            extract_action('{"action": "launch_rocket", "value": "now"}')
+        )
+
     def test_normalize_action_rejects_missing_value(self):
         self.assertIsNone(normalize_action({"action": "search_web"}))
 

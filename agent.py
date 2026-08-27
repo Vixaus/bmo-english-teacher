@@ -899,9 +899,20 @@ class BotGUI:
                 if not self.interrupted.is_set()
             ).strip()
             self.thinking_sound_active.clear()
+            if self.interrupted.is_set():
+                if not img_path and self.session_memory and self.session_memory[-1] == user_message:
+                    self.session_memory.pop()
+                return
 
             action_data = None if img_path else extract_action(full_response)
             final_text = full_response
+            if not action_data and not img_path:
+                try:
+                    parsed_response = json.loads(full_response)
+                except (TypeError, ValueError):
+                    parsed_response = None
+                if isinstance(parsed_response, dict) and "action" in parsed_response:
+                    final_text = "I am not sure how to do that."
             if action_data:
                 tool_result = self.execute_action_and_get_result(action_data)
                 if tool_result == "IMAGE_CAPTURE_TRIGGERED":
