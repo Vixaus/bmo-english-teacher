@@ -937,10 +937,10 @@ class BotGUI:
                 self.tts_queue.append(final_text)
             if not img_path:
                 self.session_memory.append({"role": "assistant", "content": final_text})
-                self.save_chat_history()
+                self.commit_memory()
             elif self.session_memory:
                 self.session_memory.append({"role": "assistant", "content": final_text})
-                self.save_chat_history()
+                self.commit_memory()
             self.wait_for_tts()
             self.set_state(BotStates.IDLE, "Ready")
         except Exception as e:
@@ -966,7 +966,7 @@ class BotGUI:
                 self.speak(text)
                 self.tts_active.clear() 
             else: time.sleep(0.05)
-    
+
 
     def speak(self, text):
         clean = re.sub(r"[^\w\s,.!?:ก-๙-]", "", text)
@@ -1172,6 +1172,15 @@ class BotGUI:
             enabled=bool(CURRENT_CONFIG.get("chat_memory", True)),
         )
 
+    def commit_memory(self):
+        """Commit completed turn into bounded active history and disk memory."""
+        self.permanent_memory = normalize_history(
+            self.permanent_memory + self.session_memory,
+            SYSTEM_PROMPT,
+        )
+        self.session_memory = []
+        self.save_chat_history()
+
     def save_chat_history(self):
         if not bool(CURRENT_CONFIG.get("chat_memory", True)):
             return
@@ -1183,7 +1192,7 @@ class BotGUI:
         )
 
 if __name__ == "__main__":
-    print("--- SYSTEM STARTING ---", flush=True)
+    print("--- BMO ENGLISH TEACHER STARTING ---", flush=True)
     root = tk.Tk()
     app = BotGUI(root)
     root.mainloop()

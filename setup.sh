@@ -114,7 +114,7 @@ if [ ! -f "wakeword.onnx" ]; then
     echo -e "${YELLOW}Wake-word model missing. Add user-supplied wakeword.onnx trained for 'Hello BMO'; push-to-talk remains available.${NC}"
 fi
 
-echo -e "${GREEN}✨ Setup Complete! Run 'source venv/bin/activate' then 'python agent.py'${NC}"
+echo -e "${GREEN}✨ BMO setup complete! Run 'source venv/bin/activate' then 'python agent.py'${NC}"
 
 for required in piper/piper whisper.cpp/build/bin/whisper-cli whisper.cpp/models/ggml-base.bin voices/bmo-custom.onnx voices/bmo-custom.onnx.json; do
     if [ ! -e "$required" ]; then
