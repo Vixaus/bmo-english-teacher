@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -86,8 +87,6 @@ def normalize_action(action_data: Any):
         return None
 
     value = action_data.get("value")
-    if value is None:
-        value = action_data.get("query")
 
     if not isinstance(value, str):
         return None
@@ -136,6 +135,79 @@ def load_voice_sample_rate(model_path: Any):
             return sample_rate
 
     return None
+
+
+def validate_voice_model(model_path: Any):
+    """Return (valid, message) for Piper model and adjacent metadata."""
+    if not isinstance(model_path, str) or not model_path.strip():
+        return False, "Piper voice path is empty."
+
+    path = Path(model_path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False, f"Piper voice file missing: {model_path}"
+
+    if size < 1024:
+        return False, f"Piper voice file is invalid or too small: {model_path}"
+
+    try:
+        with path.open("rb") as handle:
+            prefix = handle.read(128)
+        if b"Not Found" in prefix or b"<html" in prefix.lower():
+            return False, f"Piper voice file is not an ONNX model: {model_path}"
+    except OSError:
+        return False, f"Piper voice file cannot be read: {model_path}"
+
+    metadata = next(iter(_metadata_candidates(model_path)), None)
+    if metadata is None or not metadata.is_file():
+        return False, f"Piper voice metadata missing: {model_path}.json"
+    sample_rate = load_voice_sample_rate(model_path)
+    if sample_rate is None:
+        return False, f"Piper voice metadata invalid: {metadata}"
+    return True, ""
+
+
+def load_history_file(path: Any, system_prompt: str, enabled: bool = True, limit: int = 10):
+    """Load and normalize history, returning current prompt on disabled/error."""
+    if not enabled:
+        return normalize_history([], system_prompt, limit)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw_history = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        raw_history = []
+    return normalize_history(raw_history, system_prompt, limit)
+
+
+def save_history_file(path: Any, history: Any, system_prompt: str = None, enabled: bool = True, limit: int = 10):
+    """Atomically save normalized history. Return False when disabled."""
+    if not enabled:
+        return False
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if system_prompt is None:
+        system_prompt = history[0].get("content", "") if isinstance(history, list) and history and isinstance(history[0], dict) else ""
+    normalized = normalize_history(history, system_prompt, limit=limit)
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=str(destination.parent),
+            prefix=f".{destination.name}.", suffix=".tmp", delete=False
+        ) as handle:
+            temp_name = handle.name
+            json.dump(normalized, handle, indent=4, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, destination)
+        return True
+    except OSError:
+        if temp_name:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+        return False
 
 
 def normalize_history(raw_history: Any, system_prompt: str, limit: int = 10):

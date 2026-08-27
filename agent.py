@@ -29,6 +29,7 @@ import datetime
 import warnings
 import wave
 import struct 
+import tempfile
 from vachanatts import TTS as ThaiTTS
 from runtime_helpers import (
     bmo_runtime_defaults,
@@ -39,6 +40,9 @@ from runtime_helpers import (
     normalize_action,
     normalize_history,
     split_tts_segments,
+    load_history_file,
+    save_history_file,
+    validate_voice_model,
 )
 
 # Suppress harmless library warnings
@@ -284,6 +288,12 @@ class BotGUI:
         
         self.permanent_memory = self.load_chat_history()
         self.session_memory = []
+        self.chat_memory_enabled = bool(CURRENT_CONFIG.get("chat_memory", True))
+        self.voice_valid, self.voice_error = validate_voice_model(
+            CURRENT_CONFIG.get("voice_model")
+        )
+        if not self.voice_valid:
+            print(f"[VOICE ERROR] {self.voice_error}", flush=True)
         self.thinking_sound_active = threading.Event()
         
         self.last_ptt_time = 0 
@@ -327,7 +337,10 @@ class BotGUI:
         self.response_text = tk.Text(master, height=6, width=60, wrap=tk.WORD, 
                                      state=tk.DISABLED, bg="#ffffff", fg="#000000", font=('Arial', 12)) 
         
-        self.status_var = tk.StringVar(value="Initializing...")
+        initial_status = "Initializing..."
+        if not self.voice_valid:
+            initial_status = "Voice unavailable; PTT ready"
+        self.status_var = tk.StringVar(value=initial_status)
         self.status_label = ttk.Label(master, textvariable=self.status_var, background="#2e2e2e", foreground="white")
         
         self.exit_button = ttk.Button(master, text="Exit & Save", command=self.safe_exit)
@@ -500,16 +513,11 @@ class BotGUI:
             raw_action = str(action_data.get("action", "")).lower().strip()
 
         normalized = normalize_action(action_data)
-        value = None
-        if isinstance(action_data, dict):
-            value = action_data.get("value") or action_data.get("query")
-
         action = normalized["action"] if normalized else raw_action
+        value = normalized["value"] if normalized else ""
         print(f"ACTION: {raw_action} -> {action}", flush=True)
 
         if not normalized:
-            if value and isinstance(value, str) and len(value.split()) > 1:
-                return f"CHAT_FALLBACK::{value}"
             return "INVALID_ACTION"
 
         if action == "get_time":
@@ -868,142 +876,77 @@ class BotGUI:
 
         model_to_use = VISION_MODEL if img_path else TEXT_MODEL
         self.set_state(BotStates.THINKING, "Thinking...", cam_path=img_path)
-        
-        messages = []
+        user_message = {"role": "user", "content": text}
         if img_path:
-            messages = [{"role": "user", "content": text, "images": [img_path]}]
+            user_message["content"] = (
+                "Describe this image in one or two short, child-safe English sentences. "
+                "Name only things you can see. Do not output JSON.\n" + text
+            )
+            messages = [user_message | {"images": [img_path]}]
         else:
-            user_msg = {"role": "user", "content": text}
-            messages = self.permanent_memory + self.session_memory + [user_msg]
-        
+            messages = self.permanent_memory + self.session_memory + [user_message]
+
+        if not img_path:
+            self.session_memory.append(user_message)
+
         self.thinking_sound_active.set()
         threading.Thread(target=self._run_thinking_sound_loop, daemon=True).start()
-        
-        full_response_buffer = ""
-        sentence_buffer = "" 
-        
+
         try:
             stream = ollama_chat_stream(messages, model=model_to_use)
-            
-            is_action_mode = False
-            
-            for chunk in stream:
-                if self.interrupted.is_set(): break 
-                content = ollama_chunk_text(chunk)
-                full_response_buffer += content
-                
-                if '{"' in content or "action:" in content.lower():
-                    is_action_mode = True
-                    self.thinking_sound_active.clear()
-                    continue 
+            full_response = "".join(
+                ollama_chunk_text(chunk) for chunk in stream
+                if not self.interrupted.is_set()
+            ).strip()
+            self.thinking_sound_active.clear()
 
-                if is_action_mode: continue
-
-                self.thinking_sound_active.clear()
-                if self.current_state != BotStates.SPEAKING:
-                    self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
-                    self.append_to_text("BOT: ", newline=False)
-
-                self._stream_to_text(content)
-                
-                sentence_buffer += content
-                if any(punct in content for punct in ".!?\n"):
-                    clean_sentence = sentence_buffer.strip()
-                    if clean_sentence and re.search(r'[a-zA-Z0-9]', clean_sentence):
-                        with self.tts_queue_lock: self.tts_queue.append(clean_sentence)
-                    sentence_buffer = ""
-
-            if is_action_mode:
-                action_data = self.extract_json_from_text(full_response_buffer)
-                if action_data:
-                    tool_result = self.execute_action_and_get_result(action_data)
-
-                    if tool_result and tool_result.startswith("CHAT_FALLBACK::"):
-                        chat_text = tool_result.split("::", 1)[1]
-                        self.thinking_sound_active.clear()
-                        self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
-                        self.append_to_text("BOT: ", newline=False)
-                        self.append_to_text(chat_text, newline=True)
-                        with self.tts_queue_lock: self.tts_queue.append(chat_text)
-                        self.session_memory.append({"role": "assistant", "content": chat_text})
-                        self.wait_for_tts()
-                        self.set_state(BotStates.IDLE, "Ready")
+            action_data = None if img_path else extract_action(full_response)
+            final_text = full_response
+            if action_data:
+                tool_result = self.execute_action_and_get_result(action_data)
+                if tool_result == "IMAGE_CAPTURE_TRIGGERED":
+                    new_img_path = self.capture_image()
+                    if new_img_path:
+                        self.chat_and_respond(text, img_path=new_img_path)
                         return
+                    final_text = "I cannot use the camera right now."
+                elif tool_result == "INVALID_ACTION":
+                    final_text = "I am not sure how to do that."
+                elif tool_result == "SEARCH_EMPTY":
+                    final_text = "I searched, but I could not find anything."
+                elif tool_result == "SEARCH_ERROR":
+                    final_text = "I cannot reach the internet right now."
+                elif tool_result and not tool_result.startswith("CHAT_FALLBACK::"):
+                    summary_prompt = [
+                        {"role": "system", "content": "Summarize this result in one short, simple English sentence. Do not output JSON."},
+                        {"role": "user", "content": f"RESULT: {tool_result}\nUser Question: {text}"},
+                    ]
+                    final_text = "".join(
+                        ollama_chunk_text(chunk)
+                        for chunk in ollama_chat_stream(summary_prompt, model=TEXT_MODEL)
+                    ).strip()
+                elif tool_result and tool_result.startswith("CHAT_FALLBACK::"):
+                    final_text = tool_result.split("::", 1)[1]
 
-                    if tool_result == "IMAGE_CAPTURE_TRIGGERED":
-                        new_img_path = self.capture_image()
-                        if new_img_path:
-                            self.chat_and_respond(text, img_path=new_img_path)
-                            return 
-
-                    elif tool_result == "INVALID_ACTION":
-                        fallback_text = "I am not sure how to do that."
-                        self.thinking_sound_active.clear()
-                        self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
-                        self.append_to_text("BOT: ", newline=False)
-                        self.append_to_text(fallback_text, newline=True)
-                        with self.tts_queue_lock: self.tts_queue.append(fallback_text)
-
-                    elif tool_result == "SEARCH_EMPTY":
-                        fallback_text = "I searched, but I couldn't find any news about that."
-                        self.thinking_sound_active.clear()
-                        self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
-                        self.append_to_text("BOT: ", newline=False)
-                        self.append_to_text(fallback_text, newline=True)
-                        with self.tts_queue_lock: self.tts_queue.append(fallback_text)
-
-                    elif tool_result == "SEARCH_ERROR":
-                        fallback_text = "I cannot reach the internet right now."
-                        self.thinking_sound_active.clear()
-                        self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
-                        self.append_to_text("BOT: ", newline=False)
-                        self.append_to_text(fallback_text, newline=True)
-                        with self.tts_queue_lock: self.tts_queue.append(fallback_text)
-
-                    elif tool_result:
-                        summary_prompt = [
-                            {"role": "system", "content": "Summarize this result in one short sentence."},
-                            {"role": "user", "content": f"RESULT: {tool_result}\nUser Question: {text}"}
-                        ]
-
-                        self.set_state(BotStates.THINKING, "Reading...")
-                        self.thinking_sound_active.set()
-
-                        summary_stream = ollama_chat_stream(
-                            summary_prompt,
-                            model=TEXT_MODEL
-                        )
-
-                        final_text = ""
-
-                        for chunk in summary_stream:
-                            final_text += ollama_chunk_text(chunk)
-
-                        self.thinking_sound_active.clear()
-                        self.set_state(
-                            BotStates.SPEAKING,
-                            "Speaking...",
-                            cam_path=img_path
-                        )
-
-                        self.append_to_text("BOT: ", newline=False)
-                        self.append_to_text(final_text, newline=True)
-
-                        with self.tts_queue_lock:
-                            self.tts_queue.append(final_text)
-
-                        self.session_memory.append({
-                            "role": "assistant",
-                            "content": final_text
-                        })
-            else:
-                self.append_to_text("")
-                self.session_memory.append({"role": "assistant", "content": full_response_buffer}) 
-            
+            if not final_text:
+                final_text = "I did not hear a clear answer."
+            self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
+            self.append_to_text("BOT: ", newline=False)
+            self.append_to_text(final_text, newline=True)
+            with self.tts_queue_lock:
+                self.tts_queue.append(final_text)
+            if not img_path:
+                self.session_memory.append({"role": "assistant", "content": final_text})
+                self.save_chat_history()
+            elif self.session_memory:
+                self.session_memory.append({"role": "assistant", "content": final_text})
+                self.save_chat_history()
             self.wait_for_tts()
             self.set_state(BotStates.IDLE, "Ready")
-                
         except Exception as e:
+            if not img_path and self.session_memory and self.session_memory[-1] == user_message:
+                self.session_memory.pop()
+            self.thinking_sound_active.clear()
             print(f"LLM Error: {e}")
             self.set_state(BotStates.ERROR, "Brain Freeze!")
 
@@ -1033,34 +976,38 @@ class BotGUI:
         print(f"[TTS SPEAKING] '{clean}'", flush=True)
 
         def _speak_thai_segment(segment):
-            output_file = "/tmp/bmo_thai.wav"
-
-            ThaiTTS(
-                segment,
-                voice="th_m_1",
-                output=output_file
-            )
-
-            with wave.open(output_file, "rb") as wf:
-                sample_rate = wf.getframerate()
-                channels = wf.getnchannels()
-                audio_data = wf.readframes(wf.getnframes())
-
-            with sd.RawOutputStream(
-                samplerate=sample_rate,
-                channels=channels,
-                dtype="int16",
-                device=None,
-                latency="low"
-            ) as stream:
-                stream.write(audio_data)
+            fd, output_file = tempfile.mkstemp(prefix="bmo_thai_", suffix=".wav")
+            os.close(fd)
+            try:
+                ThaiTTS(segment, voice="th_m_1", output=output_file)
+                with wave.open(output_file, "rb") as wf:
+                    sample_rate = wf.getframerate()
+                    channels = wf.getnchannels()
+                    sample_width = wf.getsampwidth()
+                    audio_data = wf.readframes(wf.getnframes())
+                if sample_width != 2:
+                    raise ValueError(f"Unsupported Thai WAV sample width: {sample_width}")
+                with sd.RawOutputStream(
+                    samplerate=sample_rate, channels=channels, dtype="int16",
+                    device=None, latency="low"
+                ) as stream:
+                    if not self.interrupted.is_set():
+                        stream.write(audio_data)
+            finally:
+                try:
+                    os.unlink(output_file)
+                except OSError:
+                    pass
 
         def _speak_english_segment(segment):
             voice_model = CURRENT_CONFIG.get(
                 "voice_model",
                 "piper/en_GB-semaine-medium.onnx"
             )
-            piper_rate = load_voice_sample_rate(voice_model) or 22050
+            valid, error = validate_voice_model(voice_model)
+            if not valid:
+                raise RuntimeError(error)
+            piper_rate = load_voice_sample_rate(voice_model)
 
             self.current_audio_process = subprocess.Popen(
                 [
@@ -1132,6 +1079,11 @@ class BotGUI:
                             self.current_volume = 0
             finally:
                 if self.current_audio_process:
+                    if self.current_audio_process.stdin:
+                        try:
+                            self.current_audio_process.stdin.close()
+                        except OSError:
+                            pass
                     if self.current_audio_process.stdout:
                         self.current_audio_process.stdout.close()
 
@@ -1157,9 +1109,15 @@ class BotGUI:
                     _speak_english_segment(segment)
         except Exception as e:
             print(f"TTS Error: {e}", flush=True)
+            self.set_state(BotStates.ERROR, f"Voice error: {str(e)[:60]}")
         finally:
             self.current_volume = 0
             if self.current_audio_process:
+                if self.current_audio_process.stdin:
+                    try:
+                        self.current_audio_process.stdin.close()
+                    except OSError:
+                        pass
                 if self.current_audio_process.stdout:
                     self.current_audio_process.stdout.close()
                 if self.current_audio_process.poll() is None:
@@ -1208,21 +1166,21 @@ class BotGUI:
         except: pass
 
     def load_chat_history(self):
-        if os.path.exists(MEMORY_FILE):
-            try:
-                with open(MEMORY_FILE, "r") as f:
-                    raw_history = json.load(f)
-                return normalize_history(raw_history, SYSTEM_PROMPT)
-            except: pass
-        return normalize_history([], SYSTEM_PROMPT)
+        return load_history_file(
+            MEMORY_FILE,
+            SYSTEM_PROMPT,
+            enabled=bool(CURRENT_CONFIG.get("chat_memory", True)),
+        )
 
     def save_chat_history(self):
-        full = normalize_history(
+        if not bool(CURRENT_CONFIG.get("chat_memory", True)):
+            return
+        save_history_file(
+            MEMORY_FILE,
             self.permanent_memory + self.session_memory,
-            SYSTEM_PROMPT
+            system_prompt=SYSTEM_PROMPT,
+            enabled=True,
         )
-        with open(MEMORY_FILE, "w") as f: 
-            json.dump(full, f, indent=4)
 
 if __name__ == "__main__":
     print("--- SYSTEM STARTING ---", flush=True)

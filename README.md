@@ -1,184 +1,136 @@
-# BMO English Teacher 🤖
-**An offline-first English-teaching robot for Raspberry Pi**
+# BMO English Teacher
 
-[![Watch the Demo](https://img.youtube.com/vi/l5ggH-YhuAw/maxresdefault.jpg)](https://youtu.be/l5ggH-YhuAw)
+Offline-first English-teaching robot for Raspberry Pi 4 (4 GB+) or Pi 5.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-blue) ![Platform](https://img.shields.io/badge/Platform-Raspberry%20Pi-red) ![License](https://img.shields.io/badge/License-MIT-green)
+Runtime uses local Ollama for text and vision, local Whisper.cpp for speech-to-text, Piper for English speech, and VachanaTTS for Thai explanations. Web search is optional network behavior, so system is offline-first, not fully offline.
 
-This project turns a Raspberry Pi into BMO English Teacher. It listens for `Hello BMO`, processes speech locally with Ollama, and speaks back with a low-latency neural voice while displaying reactive face animations.
+## Features
 
-**It is designed as a blank canvas:** You can easily swap the face images and sound effects to create your own character!
+- `Hello BMO` spoken greeting and intended wake phrase through a user-supplied OpenWakeWord model.
+- Return-key push-to-talk (PTT) fallback when no wake-word model exists.
+- Local Ollama models: `qwen2.5:3b` and `moondream`.
+- BMO English voice through Piper; Thai correction explanations through VachanaTTS.
+- Camera capture through `rpicam-still`, with configurable rotation.
+- Animated Tkinter face, interruption with Space, and bounded conversation history.
+- Practice Mode and Test Mode remain placeholders: `Skills coming soon`.
 
-## ✨ Features
+## Hardware and software
 
-* **100% Local Intelligence**: Powered by **Ollama** (LLM) and **Whisper.cpp** (Speech-to-Text). No API fees, no cloud data usage.
-* **Open Source Wake Word**: Wakes up to your custom model using **OpenWakeWord** (Offline & Free). No access keys required.
-* **Hardware-Aware Audio**: Automatically detects your microphone's sample rate and resamples audio on the fly to prevent ALSA errors.
-* **Smart Web Search**: Uses DuckDuckGo to find real-time news and information when the LLM doesn't know the answer.
-* **Reactive Faces**: The GUI updates the character's face based on its state (Listening, Thinking, Speaking, Idle).
-* **Fast Text-to-Speech**: Uses **Piper TTS** for low-latency, high-quality voice generation on the Pi.
-* **Vision Capable**: Can "see" and describe the world using a connected camera and the **Moondream** vision model.
+Use microphone, speaker, display, Raspberry Pi camera, Raspberry Pi OS, Ollama, and required system packages. `setup.sh` installs Python/system dependencies and builds Whisper.cpp when needed.
 
-## 🛠️ Hardware Requirements
+## Installation
 
-* **Raspberry Pi 5** (Recommended) or Pi 4 (4GB RAM minimum)
-* USB Microphone & Speaker
-* LCD Screen (DSI or HDMI)
-* Raspberry Pi Camera Module
+Install Ollama, then pull exact runtime models:
 
----
-
-## 📂 Project Structure
-
-```text
-be-more-agent/
-├── agent.py                   # The main brain script
-├── setup.sh                   # Auto-installer script
-├── wakeword.onnx              # OpenWakeWord model (The "Ear")
-├── config.json                # User settings (Models, Prompt, Hardware)
-├── chat_memory.json           # Conversation history
-├── requirements.txt           # Python dependencies
-├── whisper.cpp/               # Speech-to-Text engine
-├── piper/                     # Piper TTS engine & voice models
-├── sounds/                    # Sound effects folder
-│   ├── greeting_sounds/       # Startup .wav files
-│   ├── thinking_sounds/       # Looping .wav files
-│   ├── ack_sounds/            # "I heard you" .wav files
-│   └── error_sounds/          # Error/Confusion .wav files
-└── faces/                     # Face images folder
-    ├── idle/                  # .png sequence for idle state
-    ├── listening/             # .png sequence for listening
-    ├── thinking/              # .png sequence for thinking
-    ├── speaking/              # .png sequence for speaking
-    ├── error/                 # .png sequence for errors
-    └── warmup/                # .png sequence for startup
-```
-
----
-
-## 🚀 Installation
-
-### 1. Prerequisites
-Ensure your Raspberry Pi OS is up to date.
 ```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install git -y
-```
-
-### 2. Install Ollama
-This agent relies on [Ollama](https://ollama.com) to run the brain.
-```bash
-curl -fsSL https://ollama.com/install.sh| sh
-```
-*Pull the required models:*
-```bash
+curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5:3b
 ollama pull moondream
 ```
 
-### 3. Clone & Setup
+Run setup:
+
 ```bash
-git clone https://github.com/brenpoly/be-more-agent.git
-cd be-more-agent
-chmod +x setup.sh
+chmod +x setup.sh start_agent.sh
 ./setup.sh
-```
-*The setup script will install system libraries, create necessary folders, download Piper TTS, and set up the Python virtual environment.*
-
-### 4. Configure the Wake Word
-Provide an [OpenWakeWord](https://github.com/dscripka/openWakeWord) model trained for `Hello BMO`:
-1. Train or obtain a model for the spoken greeting `Hello BMO`.
-2. Place its `.onnx` file in the repository root as `wakeword.onnx`.
-3. Do not use an existing `Hey Jarvis` model: it is incompatible with the `Hello BMO` identity.
-
-`setup.sh` does not download a wake-word model. Without `wakeword.onnx`, BMO starts with push-to-talk (Return key) available.
-
-### 5. Run the Agent
-```bash
-source venv/bin/activate
-python agent.py
+./start_agent.sh
 ```
 
----
+Setup preserves existing voice files, Whisper trees, and backups. It does not download a default wake-word model. Setup needs internet for packages/models/assets; runtime chat and speech remain local.
 
-## 📂 Configuration (`config.json`)
+## Wake word
 
-You can modify the hardware behavior and personality in `config.json`. The `agent.py` script creates this on the first run if it doesn't exist, but you can create it manually:
+Provide an OpenWakeWord ONNX model trained for the phrase `Hello BMO` at:
+
+```text
+wakeword.onnx
+```
+
+An existing `Hey Jarvis` model is incompatible and will not detect `Hello BMO`. Without `wakeword.onnx`, press Return to start/stop PTT recording. Startup prints a warning and keeps PTT available.
+
+## Voice assets
+
+Canonical BMO Piper files:
+
+```text
+voices/bmo-custom.onnx
+voices/bmo-custom.onnx.json
+```
+
+Both must be valid. Tiny HTTP error files such as `Not Found` are rejected. JSON must contain a positive Piper sample rate (`audio.sample_rate` or `sample_rate`). Runtime reads sample rate from metadata; it does not assume 22050 Hz. If output hardware rejects that rate, runtime resamples audio to the device rate.
+
+Thai speech requires:
+
+```text
+voices/th_m_1.onnx
+```
+
+and the `vachanatts` Python package. Setup reports Thai TTS as unavailable when this voice is missing. Mixed Thai explanation plus English correction is spoken in source order.
+
+## Whisper.cpp
+
+Runtime expects:
+
+```text
+whisper.cpp/build/bin/whisper-cli
+whisper.cpp/models/ggml-base.bin
+```
+
+Setup clones/builds Whisper.cpp only when its tree is absent and builds `whisper-cli`/downloads `ggml-base.bin` when missing. Existing trees are not overwritten.
+
+## Configuration
+
+`config.json` fields:
 
 ```json
 {
-    "text_model": "qwen2.5:3b",
-    "vision_model": "moondream",
-    "voice_model": "voices/bmo-custom.onnx",
-    "chat_memory": true,
-    "camera_rotation": 180,
-    "system_prompt_extras": "",
-    "input_device": null,
-    "input_sample_rate": 44100,
-    "wake_word_name": "Hello BMO"
+  "text_model": "qwen2.5:3b",
+  "vision_model": "moondream",
+  "voice_model": "voices/bmo-custom.onnx",
+  "chat_memory": true,
+  "camera_rotation": 180,
+  "system_prompt_extras": "",
+  "input_device": null,
+  "input_sample_rate": 44100,
+  "wake_word_name": "Hello BMO"
 }
 ```
 
----
+`chat_memory` controls canonical local history file `memory.json`. When false, runtime neither reads nor writes it. Reset-memory requests clear active conversation and restore current system prompt. History is saved after completed turns and during shutdown, atomically.
 
-## 🎨 Customizing Your Character
+`input_device` accepts an ALSA/device index or a case-insensitive name fragment. `input_sample_rate` is preferred input rate; runtime checks compatible rates. `camera_rotation` is passed to image rotation; current default is 180 degrees.
 
-This software is a generic framework. You can give it a new personality by replacing the assets:
+## Project structure
 
-1.  **Faces:** The script looks for PNG sequences in `faces/[state]/`. It will loop through all images found in the folder.
-2.  **Sounds:** Put multiple `.wav` files in the `sounds/[category]/` folders. The robot will pick one at random each time (e.g., different "thinking" hums or "error" buzzes).
+```text
+agent.py                  Runtime, GUI, audio, Ollama, actions, memory
+runtime_helpers.py        Hardware-independent parsing/config/history helpers
+config.json               Runtime configuration
+memory.json               Local bounded conversation history
+setup.sh                  Raspberry Pi setup
+start_agent.sh            Virtualenv launcher
+faces/                    Animation frames by state
+sounds/                   Greeting/thinking/ack/error WAV files
+voices/                   Piper and Thai voice assets
+piper/                    Piper binary and models
+whisper.cpp/              Whisper source, build, and model
+wakeword.onnx             Optional user-supplied Hello BMO model
+```
 
----
-## 🗣️ The Custom BMO Voice
+## Actions and web search
 
-This project features a custom, locally fine-tuned text-to-speech model to make the agent sound authentic! 
+Ollama may emit strict JSON for time, search, or camera actions. Normal teaching text remains normal text. Search needs internet; unavailable search produces a short recoverable message. Camera and model work run in worker threads so Tkinter stays responsive.
 
-When you run the `setup.sh` script, it will automatically download the compiled `.onnx` model and its `.json` configuration file from the [Releases page](https://github.com/brenpoly/be-more-agent/releases) and place them into a local `voices/` directory.
+## Development checks
 
-**Manual Installation (if you are not using setup.sh):**
-1. Download `bmo.onnx` and `bmo.onnx.json` from the [Latest Release](https://github.com/brenpoly/be-more-agent/releases).
-2. Create a folder named `voices/` in the root directory of this repository.
-3. Place both downloaded files inside the `voices/` folder.
-4. Ensure your `config.json` file points to the new model:
-   ```json
-   "voice_model": "voices/bmo-custom.onnx"
-   ```
----
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m py_compile agent.py test_ollama.py
+bash -n setup.sh start_agent.sh
+```
 
-## ⚠️ Troubleshooting
+Manual Pi smoke test should cover PTT/wake word, Whisper, Ollama, English/Thai/mixed speech, camera rotation, search failure, Space interruption, reset, restart persistence, and clean shutdown.
 
-* **"No search library found":** If web search fails, ensure you are in the virtual environment and `duckduckgo-search` is installed via pip.
-* **Shutdown Errors:** When you exit the script (Ctrl+C), you might see `Expression 'alsa_snd_pcm_mmap_begin' failed`. **This is normal.** It just means the audio stream was cut off mid-sample. It does not affect the functionality.
-* **Audio Glitches:** If the voice sounds fast or slow, the script attempts to auto-detect sample rates. Ensure your `config.json` points to a valid `.onnx` voice model in the `piper/` folder.
-If your custom BMO voice sounds incredibly deep, slow, or "demonic," don't panic! This is not an issue with the Piper installation or the setup script. It is almost always caused by a **Sample Rate (Hz)** mismatch between the model and the audio player.
+## License and disclaimer
 
-Here is how to fix it:
-
-**Fix 1: Match the Sample Rate**
-By default, `agent.py` expects "medium" quality models and plays audio at 22050 Hz. If your custom model was trained at a different quality (like 48000 Hz or 16000 Hz), playing it at the default rate will stretch or compress the audio, severely altering the pitch.
-
-1. Open your model's configuration file (e.g., `voices/bmo.onnx.json`).
-2. Look for the `"sample_rate"` property and note the number (e.g., `22050`, `16000`, `48000`).
-3. Open `agent.py` and find the line: `PIPER_RATE = 22050`.
-4. Change that number to match the sample rate in your `.json` file.
-5. Save the file and restart the agent.
-
-**Fix 2: Check the Length Scale**
-If the sample rates match perfectly, the issue might be the model's internal pacing setting.
-
-1. Open your `voices/bmo.onnx.json` file.
-2. Look inside the `"inference"` block for a setting called `"length_scale"`. 
-3. Piper uses this to determine the speed of the voice. If this value is set significantly higher than `1.0`, it will stretch the audio and make BMO sound like a zombie. Lower it closer to `1.0` to speed the voice back up to normal.
-
-## 📄 License
-This project is dual-licensed:
-
-* **Software / Code:** All source code is licensed under the [MIT License](LICENSE).
-* **Hardware / 3D Models:** The `.obj`, `.stl`, and other 3D modeling files associated with the physical case are licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-nc-sa/4.0/)
-
-## ⚖️ Legal Disclaimer
-Disclaimer: Fan Project
-This repository and the associated voice model are a non-commercial, open-source fan project. "BMO" and Adventure Time are registered trademarks and copyrights of Cartoon Network and Warner Bros. Discovery. This project is not affiliated with, endorsed by, or sponsored by Cartoon Network or its parent companies.
-
-Voice Model Attribution
-The text-to-speech capabilities of this project are powered by Piper. The custom voice model was fine-tuned locally using Piper's base "Amy" model (en_US-amy-medium). The original Piper engine and base models are developed by the Rhasspy project and distributed under the MIT License.
+Software is MIT licensed. BMO and Adventure Time are trademarks/copyright of their respective owners. This fan project is not affiliated with or endorsed by Cartoon Network or Warner Bros. Discovery.

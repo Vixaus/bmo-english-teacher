@@ -13,6 +13,9 @@ from runtime_helpers import (
     normalize_action,
     normalize_history,
     split_tts_segments,
+    validate_voice_model,
+    load_history_file,
+    save_history_file,
 )
 
 
@@ -36,6 +39,9 @@ class RuntimeHelperActionTests(unittest.TestCase):
 
     def test_normalize_action_rejects_missing_value(self):
         self.assertIsNone(normalize_action({"action": "search_web"}))
+
+    def test_normalize_action_rejects_query_without_value(self):
+        self.assertIsNone(normalize_action({"action": "search_web", "query": "cats"}))
 
     def test_normalize_action_maps_aliases(self):
         result = normalize_action({"action": "check_time", "value": "now"})
@@ -64,6 +70,27 @@ class RuntimeHelperTtsTests(unittest.TestCase):
 
 
 class RuntimeHelperVoiceTests(unittest.TestCase):
+    def test_validate_voice_model_rejects_tiny_not_found_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_path = Path(tmpdir) / "bmo-custom.onnx"
+            model_path.write_bytes(b"Not Found")
+            self.assertFalse(validate_voice_model(str(model_path))[0])
+
+    def test_validate_voice_model_requires_valid_adjacent_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_path = Path(tmpdir) / "bmo-custom.onnx"
+            model_path.write_bytes(b"0" * 2048)
+            Path(f"{model_path}.json").write_text(
+                json.dumps({"audio": {"sample_rate": 22050}}), encoding="utf-8"
+            )
+            self.assertEqual(validate_voice_model(str(model_path)), (True, ""))
+
+    def test_validate_voice_model_rejects_malformed_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_path = Path(tmpdir) / "bmo-custom.onnx"
+            model_path.write_bytes(b"0" * 2048)
+            Path(f"{model_path}.json").write_text("broken", encoding="utf-8")
+            self.assertFalse(validate_voice_model(str(model_path))[0])
     def test_load_voice_sample_rate_reads_nested_audio_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_path = Path(tmpdir) / "voice.onnx"
@@ -115,6 +142,27 @@ class RuntimeHelperVoiceTests(unittest.TestCase):
 
 
 class RuntimeHelperHistoryTests(unittest.TestCase):
+    def test_disabled_history_does_not_read_or_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "memory.json"
+            self.assertEqual(load_history_file(str(path), "fresh", enabled=False), [
+                {"role": "system", "content": "fresh"}
+            ])
+            self.assertFalse(save_history_file(str(path), [{"role": "system", "content": "fresh"}], enabled=False))
+            self.assertFalse(path.exists())
+
+    def test_history_file_loads_malformed_data_safely_and_saves_atomically(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "memory.json"
+            path.write_text("not json", encoding="utf-8")
+            self.assertEqual(load_history_file(str(path), "fresh"), [
+                {"role": "system", "content": "fresh"}
+            ])
+            self.assertTrue(save_history_file(str(path), [
+                {"role": "system", "content": "fresh"},
+                {"role": "user", "content": "hello"},
+            ]))
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))[1]["content"], "hello")
     def test_normalize_history_replaces_system_message_and_limits_recent_messages(self):
         raw_history = [
             {"role": "system", "content": "old prompt"},
