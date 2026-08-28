@@ -1,11 +1,17 @@
 {
-  "text_model": "qwen2.5:3b",
-  "vision_model": "moondream",
-  "voice_model": "voices/bmo-custom.onnx",
+  "text_model": "qwen3.5:4b",
+  "vision_model": "qwen3.5:4b",
+  "voice_model": "piper/en_GB-semaine-medium.onnx",
   "chat_memory": true,
   "camera_rotation": 180,
   "system_prompt_extras": "",
-  "input_device": null,
-  "input_sample_rate": 44100,
-  "wake_word_name": "Hello BMO"
+  "input_device": "USB PnP Sound Device",
+  "input_sample_rate": 48000,
+  "silence_threshold": 0.006,
+  "recording_settle_delay": 0.15,
+  "silence_duration": 0.8,
+  "wake_word_name": "Hey BMO",
+  "ollama_context_tokens": 2048,
+  "ollama_output_tokens": 40,
+  "ollama_prompt_tokens": 1400
 }

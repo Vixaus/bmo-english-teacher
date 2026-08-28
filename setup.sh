@@ -16,7 +16,7 @@ sudo apt install -y python3-tk python3-dev python3-venv libasound2-dev portaudio
 # 2. Create Folders
 echo -e "${YELLOW}[2/6] Creating Folders...${NC}"
 mkdir -p piper
-mkdir -p voices # Added for custom BMO models
+mkdir -p voices # Optional custom BMO and Thai voice assets
 mkdir -p sounds/greeting_sounds
 mkdir -p sounds/thinking_sounds
 mkdir -p sounds/ack_sounds
@@ -54,19 +54,28 @@ if [ ! -f en_GB-semaine-medium.onnx.json ]; then
 fi
 cd ..
 
-# Download Custom BMO Voice
-echo -e "${YELLOW}Checking custom BMO voice...${NC}"
+# Download optional Custom BMO Voice
+echo -e "${YELLOW}Checking optional custom BMO voice...${NC}"
 if [ ! -f voices/bmo-custom.onnx ]; then
-    curl --fail --location -o voices/bmo-custom.onnx "https://github.com/brenpoly/be-more-agent/releases/latest/download/bmo.onnx"
+    if ! curl --fail --location -o voices/bmo-custom.onnx "https://github.com/brenpoly/be-more-agent/releases/latest/download/bmo.onnx"; then
+        echo -e "${YELLOW}Optional custom BMO voice unavailable; bundled Piper voice remains default.${NC}"
+    fi
 fi
 if [ ! -f voices/bmo-custom.onnx.json ]; then
-    curl --fail --location -o voices/bmo-custom.onnx.json "https://github.com/brenpoly/be-more-agent/releases/latest/download/bmo.onnx.json"
+    if ! curl --fail --location -o voices/bmo-custom.onnx.json "https://github.com/brenpoly/be-more-agent/releases/latest/download/bmo.onnx.json"; then
+        echo -e "${YELLOW}Optional custom BMO voice metadata unavailable; bundled Piper voice remains default.${NC}"
+    fi
 fi
-if [ ! -s voices/bmo-custom.onnx ] || [ "$(wc -c < voices/bmo-custom.onnx)" -lt 1024 ]; then
-    echo -e "${RED}❌ Invalid BMO voice model. Provide a valid voices/bmo-custom.onnx.${NC}"
-fi
-if ! python3 -c 'import json, sys; d=json.load(open("voices/bmo-custom.onnx.json")); r=d.get("audio", d).get("sample_rate"); sys.exit(0 if isinstance(r, int) and r > 0 else 1)' 2>/dev/null; then
-    echo -e "${RED}❌ Invalid BMO voice metadata. Provide adjacent voices/bmo-custom.onnx.json.${NC}"
+if [ -f voices/bmo-custom.onnx ] || [ -f voices/bmo-custom.onnx.json ]; then
+    if [ ! -s voices/bmo-custom.onnx ] || [ "$(wc -c < voices/bmo-custom.onnx)" -lt 1024 ]; then
+        echo -e "${YELLOW}Invalid optional BMO voice model. Bundled Piper voice remains default.${NC}"
+    elif [ ! -f voices/bmo-custom.onnx.json ] || ! python3 -c 'import json, sys; d=json.load(open("voices/bmo-custom.onnx.json")); r=d.get("audio", d).get("sample_rate"); sys.exit(0 if isinstance(r, int) and r > 0 else 1)' 2>/dev/null; then
+        echo -e "${YELLOW}Invalid optional BMO voice metadata. Bundled Piper voice remains default.${NC}"
+    else
+        echo -e "${GREEN}Optional custom BMO voice found.${NC}"
+    fi
+else
+    echo -e "${YELLOW}No optional custom BMO voice found; bundled Piper voice remains default.${NC}"
 fi
 
 if [ ! -f voices/th_m_1.onnx ]; then
@@ -91,36 +100,74 @@ pip install -r requirements.txt
 if [ ! -d whisper.cpp ]; then
     git clone https://github.com/ggerganov/whisper.cpp.git whisper.cpp
 fi
-if [ ! -x whisper.cpp/build/bin/whisper-cli ]; then
-    cmake -S whisper.cpp -B whisper.cpp/build -DCMAKE_BUILD_TYPE=Release
-    cmake --build whisper.cpp/build --config Release -j"$(nproc)" --target whisper-cli
+# Keep shared libraries beside whisper-cli discoverable after the repository is
+# moved. Older builds may contain an absolute runpath and a CMake cache for the
+# old checkout location. Only stale generated CMake metadata is discarded.
+WHISPER_SOURCE_DIR="$PWD/whisper.cpp"
+WHISPER_BUILD_DIR="$WHISPER_SOURCE_DIR/build"
+WHISPER_CACHE="$WHISPER_BUILD_DIR/CMakeCache.txt"
+if [ -f "$WHISPER_CACHE" ] && ! grep -Fq "CMAKE_HOME_DIRECTORY:INTERNAL=$WHISPER_SOURCE_DIR" "$WHISPER_CACHE"; then
+    echo -e "${YELLOW}Whisper build cache belongs to another checkout; regenerating it.${NC}"
+    rm -f "$WHISPER_CACHE"
+    rm -rf "$WHISPER_BUILD_DIR/CMakeFiles"
 fi
-if [ ! -f whisper.cpp/models/ggml-base.bin ]; then
-    curl --fail --location -o whisper.cpp/models/ggml-base.bin \
-        https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+cmake -S whisper.cpp -B whisper.cpp/build -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON
+cmake --build whisper.cpp/build --config Release -j"$(nproc)" --target whisper-cli
+if [ ! -f whisper.cpp/models/ggml-small.en.bin ]; then
+    curl --fail --location -o whisper.cpp/models/ggml-small.en.bin \
+        https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
 fi
+
+# Run one real transcription so a missing runtime library or invalid model
+# stops setup with a recoverable error instead of producing empty transcripts.
+WHISPER_BIN_DIR="$PWD/whisper.cpp/build/bin"
+WHISPER_CLI="$WHISPER_BIN_DIR/whisper-cli"
+WHISPER_MODEL="$PWD/whisper.cpp/models/ggml-small.en.bin"
+WHISPER_SMOKE_WAV="$(mktemp "${TMPDIR:-/tmp}/bmo-whisper-smoke.XXXXXX.wav")"
+WHISPER_SMOKE_LOG="$(mktemp "${TMPDIR:-/tmp}/bmo-whisper-smoke.XXXXXX.log")"
+python3 - "$WHISPER_SMOKE_WAV" <<'PY'
+import struct
+import sys
+import wave
+
+with wave.open(sys.argv[1], "wb") as wav:
+    wav.setnchannels(1)
+    wav.setsampwidth(2)
+    wav.setframerate(16000)
+    wav.writeframes(struct.pack("<16000h", *([0] * 16000)))
+PY
+if ! LD_LIBRARY_PATH="$WHISPER_BIN_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "$WHISPER_CLI" -m "$WHISPER_MODEL" -l en -t 1 -f "$WHISPER_SMOKE_WAV" -nt \
+    >"$WHISPER_SMOKE_LOG" 2>&1; then
+    echo -e "${RED}Whisper smoke test failed. Rebuild Whisper or inspect its libraries/model:${NC}"
+    tail -n 20 "$WHISPER_SMOKE_LOG"
+    rm -f "$WHISPER_SMOKE_WAV" "$WHISPER_SMOKE_LOG"
+    exit 1
+fi
+rm -f "$WHISPER_SMOKE_WAV" "$WHISPER_SMOKE_LOG"
+echo -e "${GREEN}Whisper transcription smoke test passed.${NC}"
 
 # 6. Pull AI Models
 echo -e "${YELLOW}[6/6] Checking AI Models...${NC}"
 if command -v ollama &> /dev/null; then
-    ollama pull qwen2.5:3b
-    ollama pull moondream
+    ollama pull qwen3.5:4b
 else
     echo -e "${RED}❌ Ollama not found. Please install it manually.${NC}"
 fi
 
 # 7. OpenWakeWord Model
 if [ ! -f "wakeword.onnx" ]; then
-    echo -e "${YELLOW}Wake-word model missing. Add user-supplied wakeword.onnx trained for 'Hello BMO'; push-to-talk remains available.${NC}"
+    echo -e "${YELLOW}Wake-word model missing. Add user-supplied wakeword.onnx trained for 'Hey BMO'; push-to-talk remains available.${NC}"
 fi
 
 echo -e "${GREEN}✨ BMO setup complete! Run 'source venv/bin/activate' then 'python agent.py'${NC}"
 
-for required in piper/piper whisper.cpp/build/bin/whisper-cli whisper.cpp/models/ggml-base.bin voices/bmo-custom.onnx voices/bmo-custom.onnx.json; do
+for required in piper/piper piper/en_GB-semaine-medium.onnx piper/en_GB-semaine-medium.onnx.json whisper.cpp/build/bin/whisper-cli whisper.cpp/models/ggml-small.en.bin; do
     if [ ! -e "$required" ]; then
         echo -e "${RED}Missing required asset: $required${NC}"
     fi
 done
 if [ ! -f wakeword.onnx ]; then
-    echo -e "${YELLOW}PTT fallback ready. Add wakeword.onnx trained for Hello BMO for wake-word activation.${NC}"
+    echo -e "${YELLOW}PTT fallback ready. Add wakeword.onnx trained for Hey BMO for wake-word activation.${NC}"
 fi

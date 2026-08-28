@@ -14,16 +14,17 @@ def configured_model():
         return override
     try:
         with open("config.json", "r", encoding="utf-8") as handle:
-            return json.load(handle).get("text_model", "qwen2.5:3b")
+            return json.load(handle).get("text_model", "qwen3.5:4b")
     except (OSError, ValueError, TypeError):
-        return "qwen2.5:3b"
+        return "qwen3.5:4b"
 
 OLLAMA_OPTIONS = {
-    "keep_alive": "-1",
     "num_thread": 4,
     "temperature": 0.7,
     "top_k": 40,
     "top_p": 0.9,
+    "num_ctx": 2048,
+    "num_predict": 40,
 }
 
 SYSTEM_PROMPT = """You are a friendly, child-safe English teacher for elementary learners.
@@ -61,6 +62,8 @@ def main():
             {"role": "user", "content": "Hello"},
         ],
         stream=True,
+        think=False,
+        keep_alive=-1,
         options=OLLAMA_OPTIONS,
     )
     response_text = ""
