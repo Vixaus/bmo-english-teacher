@@ -62,6 +62,7 @@ def bmo_runtime_defaults():
         "text_model": "qwen3.5:4b",
         "vision_model": "qwen3.5:4b",
         "voice_model": "piper/en_GB-semaine-medium.onnx",
+        "whisper_model": "whisper.cpp/models/ggml-base.en.bin",
         "chat_memory": True,
         "camera_rotation": 180,
         "system_prompt_extras": "",

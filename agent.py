@@ -81,7 +81,6 @@ MEMORY_FILE = "memory.json"
 BMO_IMAGE_FILE = "current_image.jpg"
 SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
 WHISPER_CLI = "./whisper.cpp/build/bin/whisper-cli"
-WHISPER_ENGLISH_MODEL = "./whisper.cpp/models/ggml-small.en.bin"
 WHISPER_FALLBACK_MODELS = (
     "./whisper.cpp/models/ggml-base.en.bin",
     "./whisper.cpp/models/ggml-base.bin",
@@ -876,22 +875,6 @@ class BotGUI:
                         self.oww_model.reset()
                         return
 
-                # Avoid console writes on every 80 ms frame; stdout can be
-                # slower than capture on a Pi and cause scheduling pressure.
-                if now - last_status_log >= 1.0:
-                    scores = []
-                    for values in self.oww_model.prediction_buffer.values():
-                        values = list(values)
-                        if values:
-                            scores.append(values[-1])
-                    if scores:
-                        print(
-                            f"\r[Oww] Score: {max(scores):.3f} | Vol: {current_max}   ",
-                            end="",
-                            flush=True,
-                        )
-                    last_status_log = now
-
 
     def record_voice_adaptive(self, filename="input.wav"):
         print("Recording (Adaptive)...", flush=True)
@@ -979,7 +962,11 @@ class BotGUI:
         print("Transcribing...", flush=True)
         try:
             whisper_bin_dir = os.path.abspath("./whisper.cpp/build/bin")
-            whisper_model = WHISPER_ENGLISH_MODEL
+            whisper_model = CURRENT_CONFIG.get(
+                "whisper_model", DEFAULT_CONFIG["whisper_model"]
+            )
+            if not isinstance(whisper_model, str) or not whisper_model.strip():
+                whisper_model = DEFAULT_CONFIG["whisper_model"]
             if not os.path.isfile(whisper_model):
                 whisper_model = next(
                     (path for path in WHISPER_FALLBACK_MODELS if os.path.isfile(path)),

@@ -81,10 +81,10 @@ Runtime expects:
 
 ```text
 whisper.cpp/build/bin/whisper-cli
-whisper.cpp/models/ggml-small.en.bin
+whisper.cpp/models/ggml-base.en.bin
 ```
 
-Setup keeps Whisper shared libraries relocatable with an `$ORIGIN` runpath, rebuilds `whisper-cli`, downloads the English-only `ggml-small.en.bin` model when missing, then transcribes a temporary silent WAV with language forced to English. Setup fails with Whisper output if its runtime libraries or model cannot run. Runtime also supplies `whisper.cpp/build/bin` through `LD_LIBRARY_PATH` as a fallback for older builds and always forces `-l en`.
+Setup keeps Whisper shared libraries relocatable with an `$ORIGIN` runpath, rebuilds `whisper-cli`, downloads the English-only `ggml-base.en.bin` model when missing, then transcribes a temporary silent WAV with language forced to English. Runtime reads `whisper_model` from `config.json`, tries its configured path first, then existing fallback paths if needed. Setup fails with Whisper output if its runtime libraries or model cannot run. Runtime also supplies `whisper.cpp/build/bin` through `LD_LIBRARY_PATH` as a fallback for older builds and always forces `-l en`.
 
 ## Configuration
 
@@ -95,6 +95,7 @@ Setup keeps Whisper shared libraries relocatable with an `$ORIGIN` runpath, rebu
   "text_model": "qwen3.5:4b",
   "vision_model": "qwen3.5:4b",
   "voice_model": "piper/en_GB-semaine-medium.onnx",
+  "whisper_model": "whisper.cpp/models/ggml-base.en.bin",
   "chat_memory": true,
   "camera_rotation": 180,
   "system_prompt_extras": "",

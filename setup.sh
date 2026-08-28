@@ -114,16 +114,16 @@ fi
 cmake -S whisper.cpp -B whisper.cpp/build -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON
 cmake --build whisper.cpp/build --config Release -j"$(nproc)" --target whisper-cli
-if [ ! -f whisper.cpp/models/ggml-small.en.bin ]; then
-    curl --fail --location -o whisper.cpp/models/ggml-small.en.bin \
-        https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
+if [ ! -f whisper.cpp/models/ggml-base.en.bin ]; then
+    curl --fail --location -o whisper.cpp/models/ggml-base.en.bin \
+        https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
 fi
 
 # Run one real transcription so a missing runtime library or invalid model
 # stops setup with a recoverable error instead of producing empty transcripts.
 WHISPER_BIN_DIR="$PWD/whisper.cpp/build/bin"
 WHISPER_CLI="$WHISPER_BIN_DIR/whisper-cli"
-WHISPER_MODEL="$PWD/whisper.cpp/models/ggml-small.en.bin"
+WHISPER_MODEL="$PWD/whisper.cpp/models/ggml-base.en.bin"
 WHISPER_SMOKE_WAV="$(mktemp "${TMPDIR:-/tmp}/bmo-whisper-smoke.XXXXXX.wav")"
 WHISPER_SMOKE_LOG="$(mktemp "${TMPDIR:-/tmp}/bmo-whisper-smoke.XXXXXX.log")"
 python3 - "$WHISPER_SMOKE_WAV" <<'PY'
@@ -163,7 +163,7 @@ fi
 
 echo -e "${GREEN}✨ BMO setup complete! Run 'source venv/bin/activate' then 'python agent.py'${NC}"
 
-for required in piper/piper piper/en_GB-semaine-medium.onnx piper/en_GB-semaine-medium.onnx.json whisper.cpp/build/bin/whisper-cli whisper.cpp/models/ggml-small.en.bin; do
+for required in piper/piper piper/en_GB-semaine-medium.onnx piper/en_GB-semaine-medium.onnx.json whisper.cpp/build/bin/whisper-cli whisper.cpp/models/ggml-base.en.bin; do
     if [ ! -e "$required" ]; then
         echo -e "${RED}Missing required asset: $required${NC}"
     fi
