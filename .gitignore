@@ -55,3 +55,6 @@ agent.py.*
 .DS_Store
 Thumbs.db
 ehthumbs.db
+
+# --- Local Planning Artifacts ---
+.superpowers/
