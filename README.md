@@ -1,10 +1,10 @@
-# BMO English Teacher
+# BMO English Teacher 🤖
 
-BMO English Teacher is a small AI English teacher made for Raspberry Pi.
+BMO English Teacher is a small AI English teacher for Raspberry Pi.
 
-You can talk to BMO with your voice. BMO can listen, understand what you say, help you practice English, correct mistakes, and speak back to you.
+It lets you practice English by talking with BMO using your voice. BMO can listen, understand, correct mistakes, and speak back to you.
 
-Most AI features run locally on the Raspberry Pi.
+Most features run locally, so internet is not needed for normal conversations. Internet is mainly used for setup, downloading models, and optional web search.
 
 ## What can it do?
 
@@ -207,18 +207,6 @@ You can change things like:
 * Camera rotation
 * Chat memory
 * Wake word
-
-## Internet
-
-BMO is **offline-first**.
-
-Normal AI chat, speech recognition, and English voice can run locally.
-
-Internet is still needed for things such as:
-
-* First setup
-* Downloading models
-* Web search
 
 ## Project Structure
 
