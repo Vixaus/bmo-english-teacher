@@ -157,6 +157,54 @@ class CameraHistoryTests(unittest.TestCase):
         self.assertEqual(bot.session_memory, [])
         self.assertEqual(bot.tts_queue, [])
 
+    def _test_reply(self, speech="Good. Next question?", score=4):
+        return json.dumps({
+            "speech": speech,
+            "grammar": score,
+            "vocabulary": score,
+            "comprehension": score,
+            "done": False,
+        })
+
+    def test_test_mode_skips_name_reply_and_ends_after_five_answers(self):
+        bot = self.make_bot(active_mode=None)
+        bot.greeting_acknowledged = True
+        bot._deliver_response = Mock()
+        bot._request_qwen_text = Mock(return_value=(self._test_reply(), False))
+
+        bot.chat_and_respond("Test mode")
+        self.assertEqual(bot.active_mode, "test")
+
+        bot.chat_and_respond("My name is Mali.")
+        self.assertEqual(bot.test_scores["grammar"], [])
+
+        for _ in range(5):
+            bot.chat_and_respond("I like apples.")
+
+        self.assertEqual(bot.test_scores["grammar"], [4] * 5)
+        self.assertIsNone(bot.active_mode)
+        final_text = bot._deliver_response.call_args.args[0]
+        self.assertIn("Overall: 4.0/5", final_text)
+        self.assertIn("The test is finished", final_text)
+
+        # Next turn is not test-scored and does not repeat the summary.
+        bot._deliver_response.reset_mock()
+        bot.chat_and_respond("Thank you")
+        self.assertNotIn("CEFR", bot._deliver_response.call_args.args[0])
+
+    def test_test_word_in_answer_does_not_restart_active_test(self):
+        bot = self.make_bot(active_mode="test")
+        bot.greeting_acknowledged = True
+        bot.test_name_collected = True
+        bot.test_scores = {k: [3] for k in ("grammar", "vocabulary", "comprehension")}
+        bot._deliver_response = Mock()
+        bot._request_qwen_text = Mock(return_value=(self._test_reply(), False))
+
+        bot.chat_and_respond("I have a test tomorrow.")
+
+        self.assertEqual(bot.active_mode, "test")
+        self.assertEqual(bot.test_scores["grammar"], [3, 4])
+
     def test_camera_turn_persists_original_question_and_description(self):
         bot = self.make_bot()
         question = "What is in this picture?"

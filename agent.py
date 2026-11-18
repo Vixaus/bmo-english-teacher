@@ -37,6 +37,7 @@ from runtime_helpers import (
     bmo_runtime_defaults,
     calculate_cefr_level,
     calculate_overall_score,
+    clean_whisper_output,
     compact_context,
     contains_wake_word,
     detect_mode_selection,
@@ -86,7 +87,6 @@ WHISPER_FALLBACK_MODELS = (
     "./whisper.cpp/models/ggml-base.bin",
 )
 WAKE_WORD_MODEL = "./wakeword.onnx"
-WAKE_WORD_THRESHOLD = 0.5
 
 # HARDWARE SETTINGS
 INPUT_DEVICE_NAME = None
@@ -109,11 +109,11 @@ def ollama_chat_stream(messages, model, response_format=None):
             1, int(CURRENT_CONFIG.get("ollama_context_tokens", 2048))
         )
         options["num_predict"] = max(
-            1, int(CURRENT_CONFIG.get("ollama_output_tokens", 40))
+            1, int(CURRENT_CONFIG.get("ollama_output_tokens", 160))
         )
     except (NameError, TypeError, ValueError):
         options["num_ctx"] = 2048
-        options["num_predict"] = 40
+        options["num_predict"] = 160
     request = {
         "model": model,
         "messages": messages,
@@ -184,8 +184,34 @@ TEXT_MODEL = CURRENT_CONFIG["text_model"]
 VISION_MODEL = CURRENT_CONFIG["vision_model"]
 WAKE_WORD_NAME = CURRENT_CONFIG["wake_word_name"]
 
-def resolve_input_device(config):
-    requested = config.get("input_device")
+
+def configured_number(key, default, minimum=None, maximum=None, cast=float):
+    """Read a bounded number from config, falling back to the default."""
+    try:
+        value = cast(CURRENT_CONFIG.get(key, default))
+        if value != value:  # NaN
+            raise ValueError
+    except (TypeError, ValueError):
+        value = cast(default)
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+WAKE_WORD_THRESHOLD = configured_number("wake_word_threshold", 0.5, 0.01, 0.99)
+WAKE_WORD_SILENCE_GATE = configured_number(
+    "wake_word_silence_gate", 200, 0, 32767, cast=int
+)
+WHISPER_THREADS = configured_number("whisper_threads", 4, 1, 16, cast=int)
+CAMERA_WIDTH = configured_number("camera_width", 640, 64, 4608, cast=int)
+CAMERA_HEIGHT = configured_number("camera_height", 480, 64, 3496, cast=int)
+THAI_VOICE = str(CURRENT_CONFIG.get("thai_voice") or "th_m_1")
+
+def resolve_input_device(config, key="input_device", kind="input"):
+    requested = config.get(key)
+    channel_key = f"max_{kind}_channels"
     if requested in (None, "", "default"):
         return None
 
@@ -199,16 +225,16 @@ def resolve_input_device(config):
         index = int(requested)
         if 0 <= index < len(devices):
             return index
-        print(f"[AUDIO] Input device index not found: {index}", flush=True)
+        print(f"[AUDIO] {kind.title()} device index not found: {index}", flush=True)
         return None
 
     requested_lower = str(requested).lower()
     for idx, dev in enumerate(devices):
-        print(f"[AUDIO DEBUG] Index {idx}: {dev.get('name')} (In: {dev.get('max_input_channels')})", flush=True) # DEBUG LINE
-        if dev.get("max_input_channels", 0) > 0 and requested_lower in dev.get("name", "").lower():
+        print(f"[AUDIO DEBUG] Index {idx}: {dev.get('name')} (In: {dev.get('max_input_channels')}, Out: {dev.get('max_output_channels')})", flush=True) # DEBUG LINE
+        if dev.get(channel_key, 0) > 0 and requested_lower in dev.get("name", "").lower():
             return idx
 
-    print(f"[AUDIO] Input device name not found: {requested}", flush=True)
+    print(f"[AUDIO] {kind.title()} device name not found: {requested}", flush=True)
     return None
 
 INPUT_DEVICE_NAME = resolve_input_device(CURRENT_CONFIG)
@@ -218,6 +244,42 @@ if INPUT_DEVICE_NAME is not None:
         print(f"[AUDIO] Using input device: {device_info.get('name', INPUT_DEVICE_NAME)}", flush=True)
     except Exception:
         print(f"[AUDIO] Using input device index: {INPUT_DEVICE_NAME}", flush=True)
+
+# None means the system default sink. Set "output_device" in config.json
+# (name substring or index) when speech goes to the wrong output, e.g. HDMI.
+OUTPUT_DEVICE = resolve_input_device(CURRENT_CONFIG, key="output_device", kind="output")
+if OUTPUT_DEVICE is not None:
+    print(f"[AUDIO] Using output device index: {OUTPUT_DEVICE}", flush=True)
+
+
+def output_native_rate():
+    """Default sample rate of the configured output device."""
+    try:
+        info = sd.query_devices(OUTPUT_DEVICE, kind="output")
+        return int(info["default_samplerate"])
+    except Exception:
+        return 48000
+
+
+def output_rate_supported(rate, channels=1):
+    try:
+        sd.check_output_settings(
+            device=OUTPUT_DEVICE, samplerate=rate, channels=channels, dtype="int16"
+        )
+        return True
+    except Exception:
+        return False
+
+
+def resample_int16(audio, src_rate, dst_rate):
+    """Resample a whole int16 buffer (1-D or frames x channels) with polyphase filtering."""
+    if src_rate == dst_rate or audio.size == 0:
+        return audio
+    g = np.gcd(int(src_rate), int(dst_rate))
+    out = scipy.signal.resample_poly(
+        audio.astype(np.float32), int(dst_rate) // g, int(src_rate) // g, axis=0
+    )
+    return np.clip(np.rint(out), -32768, 32767).astype(np.int16)
 
 def choose_input_samplerate(device, preferred=None):
     candidates = []
@@ -483,8 +545,8 @@ class BotGUI:
                     img = Image.open(os.path.join(folder, f)).resize((self.BG_WIDTH, self.BG_HEIGHT))
                     self.animations[state].append(ImageTk.PhotoImage(img))
             if not self.animations[state]:
-                if state in self.animations.get("idle", []):
-                     self.animations[state] = self.animations["idle"]
+                if self.animations.get("idle"):
+                    self.animations[state] = self.animations["idle"]
                 else:
                     # Blue screen fallback
                     blank = Image.new('RGB', (self.BG_WIDTH, self.BG_HEIGHT), color='#0000FF')
@@ -623,11 +685,10 @@ class BotGUI:
             self.tts_thread.start()
             
             while True:
+                # A Space interrupt belongs to the turn that just ended. Clear
+                # it before waiting so the next wake word / PTT press is kept.
+                self.interrupted.clear()
                 trigger_source = self.detect_wake_word_or_ptt()
-                if self.interrupted.is_set():
-                    self.interrupted.clear()
-                    self.set_state(BotStates.IDLE, "Resetting...")
-                    continue
 
                 # A model wake event already proves that the learner said the
                 # configured wake phrase. Accept it, show the mode menu, then
@@ -858,7 +919,7 @@ class BotGUI:
                 current_max = int(np.max(np.abs(audio_data.astype(np.int32))))
 
                 # Silence gate avoids expensive inference on idle microphone.
-                if current_max <= 200:
+                if current_max <= WAKE_WORD_SILENCE_GATE:
                     continue
 
                 self.oww_model.predict(audio_data)
@@ -883,27 +944,37 @@ class BotGUI:
 
         silence_threshold = float(CURRENT_CONFIG.get("silence_threshold", 0.006))
         silence_duration = configured_duration("silence_duration", 0.8)
-        max_record_time = 30.0
+        max_record_time = configured_duration("max_record_seconds", 30.0, maximum=120.0)
+        # How long to wait for the learner to start talking before giving up.
+        speech_start_timeout = configured_duration("speech_start_timeout", 5.0)
         buffer = []
         silent_chunks = 0
         chunk_duration = 0.05 
         chunk_size = int(samplerate * chunk_duration)
         
-        num_silent_chunks = int(silence_duration / chunk_duration)
-        max_chunks = int(max_record_time / chunk_duration)
+        num_silent_chunks = max(1, int(silence_duration / chunk_duration))
+        max_chunks = max(1, int(max_record_time / chunk_duration))
+        start_timeout_chunks = max(1, int(speech_start_timeout / chunk_duration))
         recorded_chunks = 0
+        voiced_chunks = 0
         silence_started = False
+        no_speech = False
 
         def callback(indata, frames, time_info, status):
-            nonlocal silent_chunks, recorded_chunks, silence_started
+            nonlocal silent_chunks, recorded_chunks, silence_started, voiced_chunks, no_speech
             volume_norm = np.linalg.norm(indata) / np.sqrt(len(indata))
             buffer.append(indata.copy())  
             recorded_chunks += 1
             if recorded_chunks < 5: return 
-            if volume_norm < silence_threshold:
+            if volume_norm >= silence_threshold:
+                voiced_chunks += 1
+                silent_chunks = 0
+            elif voiced_chunks >= 2:
+                # Only end on silence after the learner has actually spoken.
                 silent_chunks += 1
                 if silent_chunks >= num_silent_chunks: silence_started = True
-            else: silent_chunks = 0
+            elif recorded_chunks >= start_timeout_chunks:
+                no_speech = True
 
         try:
             # Explicitly close stream if it exists to free hardware
@@ -912,11 +983,15 @@ class BotGUI:
             
             with sd.InputStream(samplerate=samplerate, channels=1, callback=callback, 
                                 device=INPUT_DEVICE_NAME, blocksize=chunk_size): 
-                while not silence_started and recorded_chunks < max_chunks:
+                while not silence_started and not no_speech and recorded_chunks < max_chunks:
                     sd.sleep(int(chunk_duration * 1000))
         except Exception as e: 
             print(f"[AUDIO ERROR] Adaptive Recording Failed: {e}", flush=True)
             return None 
+
+        if voiced_chunks < 2:
+            print("[AUDIO] No speech detected.", flush=True)
+            return None
         
         return self.save_audio_buffer(buffer, filename, samplerate)
 
@@ -985,19 +1060,15 @@ class BotGUI:
                 + whisper_env.get("LD_LIBRARY_PATH", "")
             )
             result = subprocess.run(
-                [WHISPER_CLI, "-m", whisper_model, "-l", "en", "-t", "4", "-f", filename],
+                [WHISPER_CLI, "-m", whisper_model, "-l", "en",
+                 "-t", str(WHISPER_THREADS), "-nt", "-f", filename],
                 capture_output=True, text=True, env=whisper_env
             )
             if result.returncode != 0:
                 error = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
                 print(f"Transcription Error: Whisper failed: {error}", flush=True)
                 return ""
-            transcription_lines = result.stdout.strip().split('\n')
-            if transcription_lines and transcription_lines[-1].strip():
-                last_line = transcription_lines[-1].strip()
-                if ']' in last_line: transcription = last_line.split("]")[1].strip()
-                else: transcription = last_line
-            else: transcription = ""
+            transcription = clean_whisper_output(result.stdout)
             print(f"Heard: '{transcription}'", flush=True)
             return transcription.strip()
         except Exception as e:
@@ -1007,7 +1078,7 @@ class BotGUI:
     def capture_image(self):
         self.set_state(BotStates.CAPTURING, "Watching...")
         try:
-            subprocess.run(["rpicam-still", "-t", "500", "-n", "--width", "640", "--height", "480", "-o", BMO_IMAGE_FILE], check=True)
+            subprocess.run(["rpicam-still", "-t", "500", "-n", "--width", str(CAMERA_WIDTH), "--height", str(CAMERA_HEIGHT), "-o", BMO_IMAGE_FILE], check=True)
             rotation = CURRENT_CONFIG.get("camera_rotation", 0)
             if rotation != 0:
                 img = Image.open(BMO_IMAGE_FILE)
@@ -1047,6 +1118,8 @@ class BotGUI:
         self.active_mode = mode
         self.active_mode_context = []
         self.test_question_index = 0
+        # Runtime asks "What is your name?" first; that reply is not scored.
+        self.test_name_collected = False
         self.test_scores = {
             "grammar": [],
             "vocabulary": [],
@@ -1059,6 +1132,7 @@ class BotGUI:
         self.active_mode = None
         self.active_mode_context = []
         self.test_question_index = 0
+        self.test_name_collected = False
         self.test_scores = {
             "grammar": [],
             "vocabulary": [],
@@ -1136,7 +1210,7 @@ class BotGUI:
             user_message,
             turns,
             context_tokens=CURRENT_CONFIG.get("ollama_context_tokens", 2048),
-            output_tokens=CURRENT_CONFIG.get("ollama_output_tokens", 40),
+            output_tokens=CURRENT_CONFIG.get("ollama_output_tokens", 160),
             prompt_tokens=CURRENT_CONFIG.get(
                 "ollama_prompt_tokens", DEFAULT_OLLAMA_PROMPT_TOKENS
             ),
@@ -1149,7 +1223,7 @@ class BotGUI:
             self._mode_state_prompt(),
             user_message,
             context_tokens=CURRENT_CONFIG.get("ollama_context_tokens", 2048),
-            output_tokens=CURRENT_CONFIG.get("ollama_output_tokens", 40),
+            output_tokens=CURRENT_CONFIG.get("ollama_output_tokens", 160),
             prompt_tokens=CURRENT_CONFIG.get(
                 "ollama_prompt_tokens", DEFAULT_OLLAMA_PROMPT_TOKENS
             ),
@@ -1232,7 +1306,9 @@ class BotGUI:
             self.set_state(BotStates.IDLE, "Memory Wiped")
             return
 
-        selected_mode = None if img_path else detect_mode_selection(text)
+        selected_mode = None if img_path else detect_mode_selection(
+            text, mode_active=self.active_mode is not None
+        )
         if not img_path and contains_wake_word(text, WAKE_WORD_NAME):
             self.greeting_acknowledged = True
         if selected_mode and (
@@ -1303,18 +1379,32 @@ class BotGUI:
                     if self.interrupted.is_set():
                         return
 
+                test_finished = False
                 if test_result is None:
                     final_text = "I could not check that answer. Please try again."
                 else:
                     final_text = test_result["speech"]
-                    if not selected_mode and len(self.test_scores["grammar"]) < 5:
+                    if not getattr(self, "test_name_collected", False):
+                        # Reply to "What is your name?" is not a test answer.
+                        self.test_name_collected = True
+                    elif not selected_mode and len(self.test_scores["grammar"]) < 5:
                         for category in self.test_scores:
                             self.test_scores[category].append(test_result[category])
                         self.test_question_index += 1
                     if len(self.test_scores["grammar"]) >= 5:
-                        final_text = f"{final_text} {self._test_summary()}"
+                        # Runtime count is the source of truth, not the model's
+                        # "done" flag. Do not let the model ask another question.
+                        final_text = (
+                            f"Great job! The test is finished. {self._test_summary()} "
+                            "Say Practice Mode or Test Mode to play again."
+                        )
+                        test_finished = True
 
                 self._deliver_response(final_text, user_text=text, persist=True)
+                if test_finished:
+                    # End the test once; keep the greeting so a mode can be chosen.
+                    self.active_mode = None
+                    self.active_mode_context = []
                 return
 
             action_data = None if img_path else extract_action(full_response)
@@ -1353,7 +1443,7 @@ class BotGUI:
                         {"role": "user", "content": summary_prompt},
                         conversation_turns=(),
                         context_tokens=CURRENT_CONFIG.get("ollama_context_tokens", 2048),
-                        output_tokens=CURRENT_CONFIG.get("ollama_output_tokens", 40),
+                        output_tokens=CURRENT_CONFIG.get("ollama_output_tokens", 160),
                         prompt_tokens=CURRENT_CONFIG.get(
                             "ollama_prompt_tokens", DEFAULT_OLLAMA_PROMPT_TOKENS
                         ),
@@ -1409,6 +1499,31 @@ class BotGUI:
             else: time.sleep(0.05)
 
 
+    def _play_pcm(self, audio, rate, channels=1, chunk_frames=4096):
+        """Play an int16 buffer in interruptible chunks on the output device.
+
+        Resamples the whole buffer once (polyphase) when the device rejects
+        the source rate, so there are no per-chunk edge artifacts.
+        """
+        audio = np.asarray(audio, dtype=np.int16)
+        if channels > 1:
+            audio = audio.reshape(-1, channels)
+        if not output_rate_supported(rate, channels):
+            native = output_native_rate()
+            audio = resample_int16(audio, rate, native)
+            rate = native
+        with sd.RawOutputStream(
+            samplerate=rate, channels=channels, dtype="int16",
+            device=OUTPUT_DEVICE, latency="low"
+        ) as stream:
+            for start in range(0, len(audio), chunk_frames):
+                if self.interrupted.is_set():
+                    break
+                chunk = audio[start:start + chunk_frames]
+                self.current_volume = int(np.max(np.abs(chunk.astype(np.int32)))) if chunk.size else 0
+                stream.write(np.ascontiguousarray(chunk).tobytes())
+        self.current_volume = 0
+
     def speak(self, text):
         clean = re.sub(r"[^\w\s,.!?:ก-๙-]", "", text)
         if not clean.strip():
@@ -1420,7 +1535,7 @@ class BotGUI:
             fd, output_file = tempfile.mkstemp(prefix="bmo_thai_", suffix=".wav")
             os.close(fd)
             try:
-                ThaiTTS(segment, voice="th_m_1", output=output_file)
+                ThaiTTS(segment, voice=THAI_VOICE, output=output_file)
                 with wave.open(output_file, "rb") as wf:
                     sample_rate = wf.getframerate()
                     channels = wf.getnchannels()
@@ -1428,12 +1543,12 @@ class BotGUI:
                     audio_data = wf.readframes(wf.getnframes())
                 if sample_width != 2:
                     raise ValueError(f"Unsupported Thai WAV sample width: {sample_width}")
-                with sd.RawOutputStream(
-                    samplerate=sample_rate, channels=channels, dtype="int16",
-                    device=None, latency="low"
-                ) as stream:
-                    if not self.interrupted.is_set():
-                        stream.write(audio_data)
+                if not self.interrupted.is_set():
+                    self._play_pcm(
+                        np.frombuffer(audio_data, dtype=np.int16),
+                        sample_rate,
+                        channels=channels,
+                    )
             finally:
                 try:
                     os.unlink(output_file)
@@ -1468,32 +1583,23 @@ class BotGUI:
                 )
                 self.current_audio_process.stdin.close()
 
-                try:
-                    device_info = sd.query_devices(kind="output")
-                    native_rate = int(device_info["default_samplerate"])
-                except Exception:
-                    native_rate = 48000
-
-                use_native_rate = False
-
-                try:
-                    sd.check_output_settings(
-                        device=None,
-                        samplerate=piper_rate
-                    )
-                except Exception:
-                    use_native_rate = True
+                if not output_rate_supported(piper_rate):
+                    # Device rejects Piper's rate: collect the segment, then
+                    # resample it once. Per-chunk resampling clicks/buzzes.
+                    raw = self.current_audio_process.stdout.read()
+                    if not self.interrupted.is_set():
+                        self._play_pcm(np.frombuffer(raw, dtype=np.int16), piper_rate)
+                    return
 
                 with sd.RawOutputStream(
-                    samplerate=(
-                        native_rate if use_native_rate else piper_rate
-                    ),
+                    samplerate=piper_rate,
                     channels=1,
                     dtype="int16",
-                    device=None,
+                    device=OUTPUT_DEVICE,
                     latency="low",
                     blocksize=2048
                 ) as stream:
+                    leftover = b""
                     while True:
                         if self.interrupted.is_set():
                             break
@@ -1501,20 +1607,16 @@ class BotGUI:
                         data = self.current_audio_process.stdout.read(4096)
                         if not data:
                             break
+                        # Keep int16 alignment if a pipe read splits a sample.
+                        data = leftover + data
+                        if len(data) % 2:
+                            data, leftover = data[:-1], data[-1:]
+                        else:
+                            leftover = b""
 
                         audio_chunk = np.frombuffer(data, dtype=np.int16)
                         if len(audio_chunk) > 0:
-                            self.current_volume = np.max(np.abs(audio_chunk))
-
-                            if use_native_rate:
-                                num_samples = int(
-                                    len(audio_chunk) * (native_rate / piper_rate)
-                                )
-                                audio_chunk = scipy.signal.resample(
-                                    audio_chunk,
-                                    num_samples
-                                ).astype(np.int16)
-
+                            self.current_volume = int(np.max(np.abs(audio_chunk.astype(np.int32))))
                             stream.write(audio_chunk.tobytes())
                         else:
                             self.current_volume = 0
@@ -1605,21 +1707,12 @@ class BotGUI:
                     data = wf.readframes(wf.getnframes())
                     audio = np.frombuffer(data, dtype=np.int16)
 
-                try:
-                    device_info = sd.query_devices(kind='output')
-                    native_rate = int(device_info['default_samplerate'])
-                except:
-                    native_rate = 48000
-
                 playback_rate = file_sr
-                try:
-                    sd.check_output_settings(device=None, samplerate=file_sr)
-                except:
-                    playback_rate = native_rate
-                    num_samples = int(len(audio) * (native_rate / file_sr))
-                    audio = scipy.signal.resample(audio, num_samples).astype(np.int16)
+                if not output_rate_supported(file_sr):
+                    playback_rate = output_native_rate()
+                    audio = resample_int16(audio, file_sr, playback_rate)
 
-                sd.play(audio, playback_rate)
+                sd.play(audio, playback_rate, device=OUTPUT_DEVICE)
                 sd.wait()
         except: pass
 

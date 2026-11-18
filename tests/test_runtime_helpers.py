@@ -9,6 +9,7 @@ from runtime_helpers import (
     bmo_runtime_defaults,
     calculate_cefr_level,
     calculate_overall_score,
+    clean_whisper_output,
     compact_context,
     contains_wake_word,
     detect_mode_selection,
@@ -251,8 +252,17 @@ class RuntimeHelperBmoIdentityTests(unittest.TestCase):
                 "silence_duration": 0.8,
                 "wake_word_name": "Hey BMO",
                 "ollama_context_tokens": 2048,
-                "ollama_output_tokens": 40,
+                "ollama_output_tokens": 160,
                 "ollama_prompt_tokens": 1400,
+                "output_device": None,
+                "thai_voice": "th_m_1",
+                "whisper_threads": 4,
+                "wake_word_threshold": 0.5,
+                "wake_word_silence_gate": 200,
+                "max_record_seconds": 30,
+                "speech_start_timeout": 5.0,
+                "camera_width": 640,
+                "camera_height": 480,
             },
         )
 
@@ -295,6 +305,29 @@ class RuntimeHelperQwenModeTests(unittest.TestCase):
         self.assertTrue(contains_wake_word("Please HEY BMO!", "Hey BMO"))
         self.assertFalse(contains_wake_word("say hey bmore", "Hey BMO"))
         self.assertFalse(contains_wake_word("hey bmo", ""))
+
+    def test_wake_word_tolerates_whisper_punctuation_and_spellings(self):
+        self.assertTrue(contains_wake_word("Hey, BMO.", "Hey BMO"))
+        self.assertTrue(contains_wake_word("Hey Beemo!", "Hey BMO"))
+        self.assertTrue(contains_wake_word("hey  b.m.o practice", "Hey BMO"))
+        self.assertFalse(contains_wake_word("hey be more", "Hey BMO"))
+
+    def test_active_mode_ignores_mode_words_in_normal_sentences(self):
+        self.assertIsNone(detect_mode_selection("I have a test tomorrow", mode_active=True))
+        self.assertIsNone(detect_mode_selection("I practice piano", mode_active=True))
+        self.assertEqual(detect_mode_selection("Test mode please", mode_active=True), "test")
+        self.assertEqual(detect_mode_selection("switch to practice", mode_active=True), "practice")
+        self.assertEqual(detect_mode_selection("start the test", mode_active=True), "test")
+
+    def test_whisper_output_joins_lines_and_drops_noise_tags(self):
+        self.assertEqual(clean_whisper_output("[00:00.000 --> 00:01.000]  [BLANK_AUDIO]\n"), "")
+        self.assertEqual(
+            clean_whisper_output(
+                "[00:00.000 --> 00:03.000]  I like\n[00:03.000 --> 00:06.000]  red apples. (music)"
+            ),
+            "I like red apples.",
+        )
+        self.assertEqual(clean_whisper_output(" I like cats.\n I like dogs.\n"), "I like cats. I like dogs.")
 
     def test_skill_loading_uses_bundled_mode_files(self):
         self.assertIn("A1–A2", load_skill("practice"))

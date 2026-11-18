@@ -161,6 +161,23 @@ if [ ! -f "wakeword.onnx" ]; then
     echo -e "${YELLOW}Wake-word model missing. Add user-supplied wakeword.onnx trained for 'Hey BMO'; push-to-talk remains available.${NC}"
 fi
 
+# Desktop launcher: write real paths for this checkout and user.
+BMO_DIR="$(cd "$(dirname "$0")" && pwd)"
+BMO_ICON="$(ls "$BMO_DIR"/faces/idle/*.png 2>/dev/null | head -n 1)"
+cat > be-more-agent.desktop <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Be More Agent
+Comment=Launch the Be More Agent
+Exec=$BMO_DIR/start_agent.sh
+Path=$BMO_DIR
+Icon=$BMO_ICON
+Terminal=true
+Categories=Utility;
+DESKTOP
+chmod +x be-more-agent.desktop start_agent.sh
+echo -e "${GREEN}Desktop launcher written for $BMO_DIR${NC}"
+
 echo -e "${GREEN}✨ BMO setup complete! Run 'source venv/bin/activate' then 'python agent.py'${NC}"
 
 for required in piper/piper piper/en_GB-semaine-medium.onnx piper/en_GB-semaine-medium.onnx.json whisper.cpp/build/bin/whisper-cli whisper.cpp/models/ggml-base.en.bin; do

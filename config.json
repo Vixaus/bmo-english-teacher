@@ -13,6 +13,15 @@
   "silence_duration": 0.8,
   "wake_word_name": "Hey BMO",
   "ollama_context_tokens": 2048,
-  "ollama_output_tokens": 40,
-  "ollama_prompt_tokens": 1400
+  "ollama_output_tokens": 160,
+  "ollama_prompt_tokens": 1400,
+  "output_device": null,
+  "thai_voice": "th_m_1",
+  "whisper_threads": 4,
+  "wake_word_threshold": 0.5,
+  "wake_word_silence_gate": 200,
+  "max_record_seconds": 30,
+  "speech_start_timeout": 5.0,
+  "camera_width": 640,
+  "camera_height": 480
 }

@@ -27,7 +27,7 @@ VALID_ACTIONS = {"get_time", "search_web", "capture_image"}
 MODE_NAMES = {"practice": "practice", "test": "test"}
 TEST_SCORE_FIELDS = ("grammar", "vocabulary", "comprehension")
 DEFAULT_OLLAMA_CONTEXT_TOKENS = 2048
-DEFAULT_OLLAMA_OUTPUT_TOKENS = 40
+DEFAULT_OLLAMA_OUTPUT_TOKENS = 160
 # Total estimated input prompt budget.  Keep below the normal 75%-safe
 # budget for a 2,048-token context so required instructions still have room
 # for several recent user/assistant turns.
@@ -75,33 +75,92 @@ def bmo_runtime_defaults():
         "ollama_context_tokens": DEFAULT_OLLAMA_CONTEXT_TOKENS,
         "ollama_output_tokens": DEFAULT_OLLAMA_OUTPUT_TOKENS,
         "ollama_prompt_tokens": DEFAULT_OLLAMA_PROMPT_TOKENS,
+        # Hardware/runtime knobs (previously hardcoded in agent.py).
+        "output_device": None,
+        "thai_voice": "th_m_1",
+        "whisper_threads": 4,
+        "wake_word_threshold": 0.5,
+        "wake_word_silence_gate": 200,
+        "max_record_seconds": 30,
+        "speech_start_timeout": 5.0,
+        "camera_width": 640,
+        "camera_height": 480,
     }
 
 
-def detect_mode_selection(text: Any):
-    """Return practice/test selection from standalone mode words.
+def detect_mode_selection(text: Any, mode_active: bool = False):
+    """Return practice/test selection from the learner's words.
 
-    Accepts ``practice`` and ``test`` with or without the word ``mode``.
-    Returns ``None`` when neither word appears or both appear.
+    With no active mode, a bare ``practice`` or ``test`` selects that mode.
+    During an active mode, ordinary sentences such as "I have a test
+    tomorrow" must not switch modes, so an explicit phrase is required:
+    ``practice mode``, ``switch to test``, ``start the test`` and similar.
+    Returns ``None`` when nothing (or both modes) is selected.
     """
     if not isinstance(text, str):
         return None
 
-    found = {
-        mode for word, mode in (("practice", "practice"), ("test", "test"))
-        if re.search(rf"\b{re.escape(word)}\b", text, flags=re.IGNORECASE)
-    }
+    found = set()
+    for mode in ("practice", "test"):
+        if mode_active:
+            pattern = (
+                rf"\b{mode}\s+mode\b"
+                rf"|\b(?:switch|change|go)\s+(?:back\s+)?to\s+(?:the\s+)?{mode}\b"
+                rf"|\b(?:start|begin)\s+(?:a\s+|the\s+)?{mode}\b"
+            )
+        else:
+            pattern = rf"\b{mode}\b"
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            found.add(mode)
     return next(iter(found)) if len(found) == 1 else None
 
 
+# Whisper spellings of "BMO" mapped to one canonical token.
+_BMO_ALIASES = re.compile(
+    r"\b(?:b\s*m\s*o|bee\s*mo|beemo|bemo|bimo|beamo|be\s+mo)\b"
+)
+
+
+def _normalize_wake_text(text: str):
+    """Lowercase, drop punctuation, collapse spaces, canonicalize BMO."""
+    text = re.sub(r"[^\w\s]", " ", text.lower())
+    text = re.sub(r"\s+", " ", text).strip()
+    return _BMO_ALIASES.sub("bmo", text)
+
+
 def contains_wake_word(text: Any, wake_word: Any):
-    """Return whether text contains the configured wake word as a phrase."""
+    """Return whether text contains the configured wake word as a phrase.
+
+    Tolerates Whisper punctuation ("Hey, BMO.") and common BMO spellings.
+    """
     if not isinstance(text, str) or not isinstance(wake_word, str):
         return False
-    wake_word = wake_word.strip()
-    if not wake_word:
+    wake = _normalize_wake_text(wake_word)
+    if not wake:
         return False
-    return bool(re.search(rf"(?<!\w){re.escape(wake_word)}(?!\w)", text, flags=re.IGNORECASE))
+    return bool(re.search(rf"(?<!\w){re.escape(wake)}(?!\w)", _normalize_wake_text(text)))
+
+
+_WHISPER_TIMESTAMP = re.compile(r"^\s*\[\d[\d:.]*\s*-->\s*[\d:.]+\]\s*")
+_WHISPER_TAG = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")
+
+
+def clean_whisper_output(stdout: Any):
+    """Join every Whisper output line and drop timestamps/noise tags.
+
+    Handles both ``-nt`` output and timestamped lines, and removes markers
+    such as ``[BLANK_AUDIO]``, ``(music)`` or ``*laughs*``.
+    """
+    if not isinstance(stdout, str):
+        return ""
+    parts = []
+    for line in stdout.splitlines():
+        line = _WHISPER_TIMESTAMP.sub("", line)
+        line = _WHISPER_TAG.sub(" ", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            parts.append(line)
+    return " ".join(parts).strip()
 
 
 def load_skill(mode: Any, skills_dir: Any = "skills"):
