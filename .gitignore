@@ -12,6 +12,10 @@ venv/
 # Ignore the Piper TTS folder (it's huge and OS-specific)
 piper/
 
+# Ignore locally cloned/build dependencies and optional voice assets
+whisper.cpp/
+voices/
+
 # Ignore large model files
 *.onnx
 *.bin
@@ -37,6 +41,15 @@ chat_memory.json
 camera_capture.jpg
 current_image.jpg
 test_audio.wav
+
+# --- Local Backups and Test Artifacts ---
+agent.py.*
+*.bak
+*.backup
+*.broken
+.pytest_cache/
+.coverage
+*.log
 
 # --- OS Generated Files ---
 .DS_Store
